@@ -4,8 +4,6 @@
 
 Todo:
 - Reconsider using protobuf library for json encoding (faster, but skips empty values, https://github.com/apple/swift-protobuf/issues/1171)
-- prepare licensing, release as open-source
-- blog anouncement
 - include additional postal database http://download.geonames.org/export/zip/
 - correctly implement iso2 county code filter
 - GeoIP support + weighted results by distance
