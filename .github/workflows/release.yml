@@ -41,10 +41,10 @@ jobs:
         ${{ env.swift_build }}
         mv .build/release/Run build/geocoding-api
     - name: Package
-      uses: bpicode/github-action-fpm@master
+      uses: gravitl/github-action-fpm@master
       with:
         fpm_args: './build'
-        fpm_opts: 'fpm -s dir -t deb -n geocoding-api -v ${{github.ref_name}} --deb-user geoocoding-api --deb-group geoocoding-api --deb-systemd geocoding-api.service --deb-default geocoding-api.env geocoding-api=/usr/local/bin/'
+        fpm_opts: '-s dir -t deb -n geocoding-api -v ${{github.ref_name}} --deb-user geoocoding-api --deb-group geoocoding-api --deb-systemd geocoding-api.service --deb-default geocoding-api.env geocoding-api=/usr/local/bin/'
     - name: Rename deb file
       run: mv geocoding-api_${{github.ref_name}}_amd64.deb geocoding-api_${{github.ref_name}}_focal_amd64.deb
     - name: Release
