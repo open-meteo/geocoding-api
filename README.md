@@ -18,7 +18,7 @@ The standalone `geocodingapi` binary can run on any 64-bit linux with recent lib
 ```bash
 api install zip
 useradd --user-group --create-home --system --skel /dev/null --home-dir /app geocoding
-curl https://github.com/open-meteo/geocoding-api/releases/download/0.0.10/geocodingapi-ubuntu-20.04.gz | gunzip > /app/geocodingapi
+curl https://github.com/open-meteo/geocoding-api/releases/download/0.0.1/geocodingapi-ubuntu-20.04.gz | gunzip > /app/geocodingapi
 chmod +x /app/geocodingapi
 mkdir /app/data
 cd /app/data
