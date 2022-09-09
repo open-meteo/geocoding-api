@@ -39,7 +39,7 @@ jobs:
     - name: Build
       run: |
         ${{ env.swift_build }}
-        mv .build/release/Run > build/geocoding-api
+        mv .build/release/Run build/geocoding-api
     - name: Package
       uses: bpicode/github-action-fpm@master
       with:
