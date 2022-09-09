@@ -1,0 +1,55 @@
+on:
+  push:
+    tags:
+      - '*.*.*'
+
+name: Upload Release Asset
+
+env:
+  swift_package_resolve: swift package resolve
+  swift_build: swift build -c release # -Xswiftc -Ounchecked -Xswiftc -g -Xswiftc -static-stdlib -Xswiftc -cross-module-optimization
+  swift_test: swift test
+  cache_version: 1
+
+jobs:
+  linux:
+    runs-on: ubuntu-20.04
+    container: swift:5.6.2-focal
+    name: Linux
+    steps:
+    - name: Get Swift Version
+      id: get-swift-version
+      run: |
+        echo "::set-output name=version::$(swift -version | head -n 1 | sed s/,// )"
+      shell: bash
+    - uses: actions/checkout@v2
+    - name: Cache resolved dependencies
+      id: cache-resolved-dependencies
+      uses: actions/cache@v2
+      with:
+        path: |
+          .build
+          Package.resolved
+        key: ${{ runner.os }}-${{ steps.get-swift-version.outputs.version }}-${{ env.cache_version }}-spm-deps-${{ hashFiles('Package.swift', 'Package.resolved') }}
+        restore-keys: |
+          ${{ runner.os }}-${{ steps.get-swift-version.outputs.version }}-${{ env.cache_version }}-spm-deps-
+    - name: Resolve dependencies
+      if: steps.cache-resolved-dependencies.outputs.cache-hit != 'true'
+      run: ${{ env.swift_package_resolve }}
+    - name: Build
+      run: |
+        ${{ env.swift_build }}
+        mv .build/release/Run > build/geocoding-api
+    - name: Package
+      uses: bpicode/github-action-fpm@master
+      with:
+        fpm_args: './build'
+        fpm_opts: 'fpm -s dir -t deb -n geocoding-api -v ${{github.ref_name}} --deb-user geoocoding-api --deb-group geoocoding-api --deb-systemd geocoding-api.service --deb-default geocoding-api.env geocoding-api=/usr/local/bin/'
+    - name: Rename deb file
+      run: mv geocoding-api_${{github.ref_name}}_amd64.deb geocoding-api_${{github.ref_name}}_focal_amd64.deb
+    - name: Release
+      uses: ncipollo/release-action@v1
+      with:
+        generateReleaseNotes: true
+        artifacts: 'geocoding-api_${{github.ref_name}}_focal_amd64.deb'
+        draft: true

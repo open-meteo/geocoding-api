@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+message GeocodingApi {
+    message SearchResults {
+        repeated Geoname results = 1;
+        float generationtime_ms = 2;
+    }
+
+    message Geoname {
+        int32 id = 1;
+        string name = 2;
+        float latitude = 4;
+        float longitude = 5;
+        float ranking = 6;
+        float elevation = 7;
+        string feature_code = 8;
+        string country_code = 9;
+        int32 country_id = 18;
+        string country = 19;
+        int32 admin1_id = 10;
+        int32 admin2_id = 11;
+        int32 admin3_id = 12;
+        int32 admin4_id = 13;
+        string admin1 = 20;
+        string admin2 = 21;
+        string admin3 = 22;
+        string admin4 = 23;
+        string timezone = 14;
+        uint32 population = 15;
+        //map<int32, string> alternativeNames = 16;
+        repeated string postcodes = 17;
+    }
+}

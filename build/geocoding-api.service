@@ -1,0 +1,15 @@
+[Unit]
+Description = Run Open-Meteo geocoding API
+
+[Service]
+EnvironmentFile=/etc/default/geocoding-api.env
+Type=simple
+User=geocoding-api
+Group=geocoding-api
+WorkingDirectory=/var/lib/geocoding-api/
+ExecStart=/usr/local/bin/geocoding-api serve -b $BIND --env $ENVIRONMENT
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy = multi-user.target
