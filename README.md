@@ -53,4 +53,32 @@ RestartSec=1
 WantedBy = multi-user.target
 ``
 
-Additionall nginx proxy should be used
+Additionally, nginx proxy should be used
+
+## Terms & Privacy
+Open-Meteo APIs are free for open-source developer and non-commercial use. We do not restrict access, but ask for fair use.
+
+If your application exceeds 10'000 requests per day, please contact us. We reserve the right to block applications and IP addresses that misuse our service.
+
+For commercial use of Open-Meteo APIs, please contact us.
+
+All data is provided as is without any warranty.
+
+We do not collect any personal data. We do not share any personal information. We do not integrate any third party analytics, ads, beacons or plugins.
+
+## Data License
+API data are offered under Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
+
+You are free to share: copy and redistribute the material in any medium or format and adapt: remix, transform, and build upon the material.
+
+Attribution: You must give appropriate credit, provide a link to the license, and indicate if changes were made. You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
+
+You must include a link next to any location, Open-Meteo data are displayed like:
+
+<a href="https://open-meteo.com/">Weather data by Open-Meteo.com</a>
+
+NonCommercial: You may not use the material for commercial purposes.
+
+
+## Source Code License
+Open-Meteo is open-source under the GNU Affero General Public License Version 3 (AGPLv3) or any later version. You can [find the license here](LICENSE). Exceptions are third party source-code with individual licensing in each file.
