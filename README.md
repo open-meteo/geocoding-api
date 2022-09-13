@@ -16,8 +16,8 @@ The standalone `geocodingapi` binary can run on any 64-bit linux with recent lib
 ```bash
 api install zip
 
-wget https://github.com/open-meteo/geocoding-api/releases/download/0.0.5/geocoding-api_0.0.5_focal_amd64.deb
-dpkg -i geocoding-api_0.0.4_focal_amd64.deb
+wget https://github.com/open-meteo/geocoding-api/releases/download/0.0.6/geocoding-api_0.0.6_focal_amd64.deb
+dpkg -i geocoding-api_0.0.6_focal_amd64.deb
 
 mkdir /var/lib/geocoding-api/data
 cd /var/lib/geocoding-api/data

@@ -7,7 +7,7 @@ name: Upload Release Asset
 
 env:
   swift_package_resolve: swift package resolve
-  swift_build: swift build --enable-test-discovery -c release -Xswiftc -Ounchecked -Xswiftc -g -Xswiftc -static-stdlib -Xswiftc -cross-module-optimization
+  swift_build: swift build -c release -Xswiftc -g -Xswiftc -static-stdlib # -Xswiftc -Ounchecked -Xswiftc -cross-module-optimization
   swift_test: swift test
   cache_version: 1
 
