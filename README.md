@@ -15,11 +15,12 @@ The standalone `geocodingapi` binary can run on any 64-bit linux with recent lib
 
 ```bash
 api install zip
-useradd --user-group --create-home --system --skel /dev/null --home-dir /app geocoding
-curl https://github.com/open-meteo/geocoding-api/releases/download/0.0.1/geocodingapi-ubuntu-20.04.gz | gunzip > /app/geocodingapi
-chmod +x /app/geocodingapi
-mkdir /app/data
-cd /app/data
+
+wget https://github.com/open-meteo/geocoding-api/releases/download/0.0.5/geocoding-api_0.0.5_focal_amd64.deb
+dpkg -i geocoding-api_0.0.4_focal_amd64.deb
+
+mkdir /var/lib/geocoding-api/data
+cd /var/lib/geocoding-api/data
 mkdir zip
 curl http://download.geonames.org/export/dump/allCountries.zip -o allCountries.zip
 curl http://download.geonames.org/export/dump/alternateNames.zip -o alternateNames.zip
@@ -28,28 +29,10 @@ unzip allCountries.zip
 unzip alternateNames.zip
 cd zip; unzip allCountries.zip; cd ..
 
-systemctl enable geocoding8080
-systemctl start geocoding8080
-systemctl status geocoding8080
+systemctl enable geocoding-api.service
+systemctl start geocoding-api.service
+systemctl status geocoding-api.service
 ```
-
-- Create systemd service unit at `/etc/systemd/system/geocoding8080.service`
-``
-[Unit]
-Description = Run geocoding API on port 8080
-
-[Service]
-Type=simple
-User=geocoding
-Group=geocoding
-WorkingDirectory=/app
-ExecStart=/app/geocodingapi serve -b 127.0.0.1:8080 --env production
-Restart=always
-RestartSec=1
-
-[Install]
-WantedBy = multi-user.target
-``
 
 Additionally, nginx proxy should be used
 
