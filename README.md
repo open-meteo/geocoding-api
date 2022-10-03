@@ -34,7 +34,9 @@ systemctl start geocoding-api.service
 systemctl status geocoding-api.service
 ```
 
-Additionally, nginx proxy should be used
+Geonames data are parsed and processed during the first start, which requires some times and memor. At least 6GB RAM is required and it takes about 25 minutes on a CPU with 2 Skylake cores. Database loading takes about 5 minutes after that.
+
+Additionally, nginx proxy should be used.
 
 ## Terms & Privacy
 Open-Meteo APIs are free for open-source developer and non-commercial use. We do not restrict access, but ask for fair use.
