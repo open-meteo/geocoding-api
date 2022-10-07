@@ -63,7 +63,10 @@ struct GeocodingapiController: RouteCollection {
             name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
             let areaName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if areaName.count > 1 {
-                areaIds = database.search(areaName, languageId: Int32(languageId), maxCount: 10).map({
+                areaIds = database.search(areaName, languageId: Int32(languageId), maxCount: 10).compactMap({
+                    guard ["ADM1","ADM2","ADM3","ADM4","PCLI"].contains(database.geonames.geonames[$0.0]?.featureCode) else {
+                        return nil
+                    }
                     return $0.0
                 })
             }
