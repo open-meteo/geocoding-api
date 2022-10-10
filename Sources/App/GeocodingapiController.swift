@@ -55,8 +55,24 @@ struct GeocodingapiController: RouteCollection {
         let language = params.language ?? "en"
         let languageId = database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
         let count = try params.getCount()
-        
-        var results = params.name.count < 2 ? [] : database.search(params.name, languageId: Int32(languageId), maxCount: count)
+
+        var name = params.name
+        var areaIds: [Int32]?
+        if name.contains(",") { // Split string by comma, so we can filter the results later by second part
+            let parts = name.components(separatedBy: ",")
+            name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let areaName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            if areaName.count > 1 {
+                areaIds = database.search(areaName, languageId: Int32(languageId), maxCount: 10).compactMap({
+                    guard ["ADM1","ADM2","ADM3","ADM4","PCLI"].contains(database.geonames.geonames[$0.0]?.featureCode) else {
+                        return nil
+                    }
+                    return $0.0
+                })
+            }
+        }
+
+        var results = params.name.count < 2 ? [] : database.search(name, languageId: Int32(languageId), maxCount: count)
         /// TODO country filter need to be inside database match, because `count` would be wrong otherwise
         if let countryCode = params.countryCode {
             /*guard let countryId = searchTree.geonames.countryIso2.firstIndex(of: countryCode) else {
@@ -67,6 +83,15 @@ struct GeocodingapiController: RouteCollection {
                     return false
                 }
                 return c == countryCode
+            })
+        }
+        if let areas = areaIds {
+            results = results.filter({ // Filter the results by second part of the original string
+                return areas.contains(database.geonames.geonames[$0.0]?.admin1ID ?? -1)
+                    || areas.contains(database.geonames.geonames[$0.0]?.admin2ID ?? -1)
+                    || areas.contains(database.geonames.geonames[$0.0]?.admin3ID ?? -1)
+                    || areas.contains(database.geonames.geonames[$0.0]?.admin4ID ?? -1)
+                    || areas.contains(database.geonames.geonames[$0.0]?.countryID ?? -1)
             })
         }
         let mapped: [GeocodingApi.Geoname] = results.map({
