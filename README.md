@@ -11,13 +11,13 @@ Todo:
 
 
 ## Installation on ubuntu 20.04
-The standalone `geocodingapi` binary can run on any 64-bit linux with recent libc. Currently only basic installation instructions for ubuntu 20.04 are available. Later Docker and others can be provided.
+The standalone `geocodingapi` binary can run on any 64-bit linux with recent libc. Currently only basic installation instructions for ubuntu 22.04 are available. Later Docker and others can be provided.
 
 ```bash
 api install zip
 
-wget https://github.com/open-meteo/geocoding-api/releases/download/0.0.6/geocoding-api_0.0.6_focal_amd64.deb
-dpkg -i geocoding-api_0.0.6_focal_amd64.deb
+wget https://github.com/open-meteo/geocoding-api/releases/download/0.1.1/geocoding-api_0.0.6_jammy_amd64.deb
+dpkg -i geocoding-api_0.1.1_jammy_amd64.deb
 
 mkdir /var/lib/geocoding-api/data
 cd /var/lib/geocoding-api/data
