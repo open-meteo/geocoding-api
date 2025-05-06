@@ -1,15 +1,18 @@
 [Unit]
 Description = Run Open-Meteo geocoding API
+StartLimitIntervalSec=0
 
 [Service]
 EnvironmentFile=/etc/default/geocoding-api.env
+PassEnvironment=VAPOR_ENV LOG_LEVEL SWIFT_BACKTRACE
 Type=simple
 User=geocoding-api
 Group=geocoding-api
 WorkingDirectory=/var/lib/geocoding-api/
-ExecStart=/usr/local/bin/geocoding-api serve -b $BIND --env $ENVIRONMENT
+ExecStart=/usr/local/bin/geocoding-api serve -b $API_BIND --env $VAPOR_ENV
 Restart=always
 RestartSec=1
+LimitNOFILE=infinity
 
 [Install]
 WantedBy = multi-user.target
