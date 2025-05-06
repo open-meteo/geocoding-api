@@ -29,9 +29,9 @@ extension GeocodingDatabase {
             try Self.createDatabase(logger: logger)
         }
         let start = Date()
-        logger.info("Load existing database")
+        logger.info("Loading existing database...")
         let data = try Data(contentsOf: URL(fileURLWithPath: "data/database.bin"), options: [.mappedIfSafe, .uncached])
-        let searchTree = try GeocodingDatabase(serializedData: data)
+        let searchTree = try GeocodingDatabase(serializedBytes: data)
         logger.info("Finished loading in \(Date().timeIntervalSince(start)) seconds, \(searchTree.geonames.geonames.count) entries")
         return searchTree
     }
