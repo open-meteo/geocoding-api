@@ -30,7 +30,7 @@ struct GeocodingapiController: RouteCollection {
         let corsGroup = routes.grouped(cors, ErrorMiddleware.default(environment: try .detect()))
         let categoriesRoute = corsGroup.grouped("v1")
         categoriesRoute.get("search", use: self.search)
-        categoriesRoute.get("proximity", use: self.proxmity)
+        //categoriesRoute.get("proximity", use: self.proxmity)
         categoriesRoute.get("get", use: self.get)
     }
     
@@ -107,7 +107,7 @@ struct GeocodingapiController: RouteCollection {
     }
     
     
-    func proxmity(_ request: Request) throws -> EventLoopFuture<Response> {
+    /*func proxmity(_ request: Request) throws -> EventLoopFuture<Response> {
         struct SearchQuery: Content {
             let latitude: Float
             let longitude: Float
@@ -153,7 +153,7 @@ struct GeocodingapiController: RouteCollection {
         out.results = mapped
         out.generationtimeMs = Float(Date().timeIntervalSince(start)*1000)
         return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
-    }
+    }*/
     
     func get(_ request: Request) throws -> EventLoopFuture<Response>{
         struct GetQuery: Content {

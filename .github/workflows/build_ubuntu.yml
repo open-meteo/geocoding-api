@@ -1,9 +1,7 @@
 on:
-  push:
-    tags:
-      - '*.*.*'
+  workflow_dispatch:
 
-name: Upload Release Asset
+name: Build ubuntu package as artifact
 
 env:
   swift_package_resolve: swift package resolve
@@ -19,10 +17,11 @@ jobs:
     steps:
     - name: Get Swift Version
       id: get-swift-version
-      run: |
-        echo "::set-output name=version::$(swift -version | head -n 1 | sed s/,// )"
+      run: echo "version=$(swift -version | head -n 1 | sed s/,// )" >> $GITHUB_OUTPUT
       shell: bash
     - uses: actions/checkout@v4
+    - name: Copy Swift Backtrace
+      run: cp /usr/libexec/swift/linux/swift-backtrace-static ./swift-backtrace
     - name: Cache resolved dependencies
       id: cache-resolved-dependencies
       uses: actions/cache@v4
