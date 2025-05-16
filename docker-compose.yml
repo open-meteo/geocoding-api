@@ -13,8 +13,6 @@
 #   Run commands: docker-compose run open-meteo --help
 #       Stop all: docker-compose down (add -v to wipe data)
 #
-version: '3.7'
-
 volumes:
   db_data:
 
