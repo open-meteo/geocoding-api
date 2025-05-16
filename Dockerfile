@@ -1,7 +1,7 @@
 # ================================
 # Build image
 # ================================
-FROM swift:6.1-jammy as build
+FROM swift:6.1-noble as build
 WORKDIR /build
 
 # First just resolve dependencies.
@@ -20,7 +20,7 @@ RUN swift build --enable-test-discovery -c release
 # ================================
 # Run image
 # ================================
-FROM swift:6.1-jammy-slim
+FROM swift:6.1-noble-slim
 
 # Create a vapor user and group with /app as its home directory
 RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app vapor
@@ -37,6 +37,6 @@ COPY --from=build --chown=vapor:vapor /build/Public /app/Public
 # Ensure all further commands run as the vapor user
 USER vapor:vapor
 
-# Start the Vapor service when the image is run, default to listening on 8080 in production environment 
+# Start the Vapor service when the image is run, default to listening on 8080 in production environment
 ENTRYPOINT ["./app"]
 CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
