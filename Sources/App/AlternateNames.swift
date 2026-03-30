@@ -42,7 +42,7 @@ struct AlternateNames {
             let isPreferredName = line.seekUntil(value: tab, offset: &offset).asciiToInt8
             let isShortName = line.seekUntil(value: tab, offset: &offset).asciiToInt8
             let isColloquial = line.seekUntil(value: tab, offset: &offset).asciiToInt8
-            //let isHistoric = line[line.seekUntil(value: tab, offset: &offset)].asciiToInt8
+            let isHistoric = line.seekUntil(value: tab, offset: &offset).asciiToInt8
 
             let isolanguageString = isolanguage.string
 
@@ -50,7 +50,7 @@ struct AlternateNames {
                 return
             }
 
-            if isColloquial == 1 {  //isHistoric == 1 ||
+            if isColloquial == 1 || isHistoric == 1 {
                 return
             }
 
@@ -68,7 +68,8 @@ struct AlternateNames {
                 languageId: languages.findOrAppend(isolanguage),
                 alternateName: alternateName,
                 isPreferredeName: isPreferredName != 0,
-                isShortName: isShortName != 0
+                isShortName: isShortName != 0,
+                isHistoric: isHistoric != 0
             )
 
             if alternateNames[geonameid] != nil {
@@ -106,27 +107,38 @@ private struct AlternateName {
     let alternateName: String
     let isPreferredeName: Bool
     let isShortName: Bool
+    let isHistoric: Bool
 }
 
-fileprivate extension Array where Element == AlternateName {
-    func getPreferred() -> String {
-        var short: String? = nil
+extension Array where Element == AlternateName {
+    fileprivate func getPreferred() -> String {
+        var preferredShort: String? = nil
         var preferred: String? = nil
-        var other: String? = nil
-        for alternate in self {
-            if alternate.isPreferredeName && alternate.isShortName {
-                return alternate.alternateName
+        var short: String? = nil
+        var modern: String? = nil
+        var historic: String? = nil
+
+        for alternate in self.reversed() {
+            if alternate.isHistoric {
+                historic = alternate.alternateName
+                continue
             }
-            if alternate.isShortName {
-                short = alternate.alternateName
+
+            if alternate.isPreferredeName && alternate.isShortName {
+                preferredShort = alternate.alternateName
                 continue
             }
             if alternate.isPreferredeName {
                 preferred = alternate.alternateName
                 continue
             }
-            other = alternate.alternateName
+            if alternate.isShortName {
+                short = alternate.alternateName
+                continue
+            }
+            modern = alternate.alternateName
         }
-        return short ?? preferred ?? other ?? ""
+
+        return preferredShort ?? preferred ?? short ?? modern ?? historic ?? ""
     }
 }

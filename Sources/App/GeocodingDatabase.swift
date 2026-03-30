@@ -3,13 +3,16 @@ import Vapor
 
 extension GeocodingDatabase {
     static let geonamesFile = URL(fileURLWithPath: "data/allCountries.txt")
-    static let alternateNamesFiles = URL(fileURLWithPath: "data/alternateNames.txt")
+    static let alternateNamesFiles = URL(fileURLWithPath: "data/alternateNamesV2.txt")
     static let databaseFile = URL(fileURLWithPath: "data/database.bin")
 
     /// Read geonames txt files and create an index protobuf file
     public static func createDatabase(logger: Logger) throws {
         logger.info("Create new geocoding database")
-        let alternativeNamesData = try Data(contentsOf: alternateNamesFiles, options: [.mappedIfSafe, .uncached])
+        let alternativeNamesData = try Data(
+            contentsOf: alternateNamesFiles,
+            options: [.mappedIfSafe, .uncached]
+        )
         let alternate = AlternateNames(data: alternativeNamesData, logger: logger)
 
         let geonamesData = try Data(contentsOf: geonamesFile, options: [.mappedIfSafe, .uncached])
@@ -31,7 +34,10 @@ extension GeocodingDatabase {
         }
         let start = Date()
         logger.info("Loading existing database...")
-        let data = try Data(contentsOf: URL(fileURLWithPath: "data/database.bin"), options: [.mappedIfSafe, .uncached])
+        let data = try Data(
+            contentsOf: URL(fileURLWithPath: "data/database.bin"),
+            options: [.mappedIfSafe, .uncached]
+        )
         let searchTree = try GeocodingDatabase(serializedBytes: data)
         logger.info(
             "Finished loading in \(Date().timeIntervalSince(start)) seconds, \(searchTree.geonames.geonames.count) entries"
@@ -41,7 +47,8 @@ extension GeocodingDatabase {
 
     /// Search for a string in the indexed location names and one language index
     public func search(_ searchString: String, languageId: Int32, maxCount: Int) -> [(Int32, Float)] {
-        let stripped = searchString.folding(options: .diacriticInsensitive, locale: nil).lowercased()
+        let stripped = searchString.folding(options: .diacriticInsensitive, locale: nil)
+            .lowercased()
         let results = PriorityQueue(length: maxCount)
         let onlyExact = searchString.count <= 2
         index.search(Substring(stripped), results: results, onlyExact: onlyExact, geonames: geonames.geonames)
