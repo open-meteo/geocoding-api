@@ -7,7 +7,7 @@ import Vapor
  Queries with 0 or 1 character, return empty results
  2 character only exact match
  3 character and more fuzzy search
- 
+
  // langauge ICAO and IATA also works!
  /v1/get?id=12345 &lang=de
  /v1/proximity?latitude=12&longitude=12 (&radius=30 &count=30 &page=1)
@@ -16,24 +16,26 @@ import Vapor
 
 struct GeocodingapiController: RouteCollection {
     let database: GeocodingDatabase
-    
+
     public init(_ app: Application) throws {
         database = try GeocodingDatabase.loadOrCreate(logger: app.logger)
     }
-    
+
     func boot(routes: RoutesBuilder) throws {
-        let cors = CORSMiddleware(configuration: .init(
-            allowedOrigin: .all,
-            allowedMethods: [.GET, /*.POST, .PUT,*/ .OPTIONS, /*.DELETE, .PATCH*/],
-            allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
-        ))
+        let cors = CORSMiddleware(
+            configuration: .init(
+                allowedOrigin: .all,
+                allowedMethods: [.GET, /*.POST, .PUT,*/ .OPTIONS /*.DELETE, .PATCH*/],
+                allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
+            )
+        )
         let corsGroup = routes.grouped(cors, ErrorMiddleware.default(environment: try .detect()))
         let categoriesRoute = corsGroup.grouped("v1")
         categoriesRoute.get("search", use: self.search)
         //categoriesRoute.get("proximity", use: self.proxmity)
         categoriesRoute.get("get", use: self.get)
     }
-    
+
     func search(_ request: Request) throws -> EventLoopFuture<Response> {
         struct SearchQuery: Content {
             let name: String
@@ -41,7 +43,7 @@ struct GeocodingapiController: RouteCollection {
             let countryCode: String?
             let format: ProtobufSerializationFormat?
             let count: Int?
-            
+
             func getCount() throws -> Int {
                 let count = self.count ?? 10
                 guard count > 0 && count <= 100 else {
@@ -53,18 +55,21 @@ struct GeocodingapiController: RouteCollection {
         let start = Date()
         let params = try request.query.decode(SearchQuery.self)
         let language = params.language ?? "en"
-        let languageId = database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
+        let languageId =
+            database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
         let count = try params.getCount()
 
         var name = params.name
         var areaIds: [Int32]?
-        if name.contains(",") { // Split string by comma, so we can filter the results later by second part
+        if name.contains(",") {  // Split string by comma, so we can filter the results later by second part
             let parts = name.components(separatedBy: ",")
             name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
             let areaName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
             if areaName.count > 1 {
                 areaIds = database.search(areaName, languageId: Int32(languageId), maxCount: 10).compactMap({
-                    guard ["ADM1","ADM2","ADM3","ADM4","PCLI"].contains(database.geonames.geonames[$0.0]?.featureCode) else {
+                    guard
+                        ["ADM1", "ADM2", "ADM3", "ADM4", "PCLI"].contains(database.geonames.geonames[$0.0]?.featureCode)
+                    else {
                         return nil
                     }
                     return $0.0
@@ -86,7 +91,7 @@ struct GeocodingapiController: RouteCollection {
             })
         }
         if let areas = areaIds {
-            results = results.filter({ // Filter the results by second part of the original string
+            results = results.filter({  // Filter the results by second part of the original string
                 return areas.contains(database.geonames.geonames[$0.0]?.admin1ID ?? -1)
                     || areas.contains(database.geonames.geonames[$0.0]?.admin2ID ?? -1)
                     || areas.contains(database.geonames.geonames[$0.0]?.admin3ID ?? -1)
@@ -95,18 +100,18 @@ struct GeocodingapiController: RouteCollection {
             })
         }
         let mapped: [GeocodingApi.Geoname] = results.map({
-            guard let geoname = database.geonames.getResponse(id: $0.0, languageId: Int32(languageId), searchRank: $0.1) else {
+            guard let geoname = database.geonames.getResponse(id: $0.0, languageId: Int32(languageId), searchRank: $0.1)
+            else {
                 fatalError("Geoname in search index was not in database.")
             }
             return geoname
         })
         var out = GeocodingApi.SearchResults()
         out.results = mapped
-        out.generationtimeMs = Float(Date().timeIntervalSince(start)*1000)
+        out.generationtimeMs = Float(Date().timeIntervalSince(start) * 1000)
         return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
     }
-    
-    
+
     /*func proxmity(_ request: Request) throws -> EventLoopFuture<Response> {
         struct SearchQuery: Content {
             let latitude: Float
@@ -115,7 +120,7 @@ struct GeocodingapiController: RouteCollection {
             let countryCode: String?
             let format: ProtobufSerializationFormat?
             let count: Int?
-            
+
             func getCount() throws -> Int {
                 let count = self.count ?? 10
                 guard count > 0 && count <= 100 else {
@@ -154,8 +159,8 @@ struct GeocodingapiController: RouteCollection {
         out.generationtimeMs = Float(Date().timeIntervalSince(start)*1000)
         return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
     }*/
-    
-    func get(_ request: Request) throws -> EventLoopFuture<Response>{
+
+    func get(_ request: Request) throws -> EventLoopFuture<Response> {
         struct GetQuery: Content {
             let id: Int32
             let language: String?
@@ -163,9 +168,11 @@ struct GeocodingapiController: RouteCollection {
         }
         let params = try request.query.decode(GetQuery.self)
         let language = params.language ?? "en"
-        let languageId = database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
-        
-        guard let out = database.geonames.getResponse(id: params.id, languageId: Int32(languageId), searchRank: 0) else {
+        let languageId =
+            database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
+
+        guard let out = database.geonames.getResponse(id: params.id, languageId: Int32(languageId), searchRank: 0)
+        else {
             throw GeocodingApiError.locationNotFound(id: params.id)
         }
         return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
@@ -182,7 +189,7 @@ extension GeocodingApiError: AbortError {
     var status: HTTPResponseStatus {
         return .badRequest
     }
-    
+
     var reason: String {
         switch self {
         case .locationNotFound(id: _):
@@ -195,10 +202,9 @@ extension GeocodingApiError: AbortError {
     }
 }
 
-
 extension GeocodingDatabase.Geoname {
     func getName(languageId: Int32) -> String {
-        return alternativeNames.first(where: {$0.0 == languageId})?.1 ?? name
+        return alternativeNames.first(where: { $0.0 == languageId })?.1 ?? name
     }
 }
 
@@ -207,7 +213,7 @@ extension GeocodingDatabase.Geonames {
         guard let g = geonames[id] else {
             return nil
         }
-        
+
         var out = GeocodingApi.Geoname()
         out.id = g.id
         out.name = g.getName(languageId: languageId)

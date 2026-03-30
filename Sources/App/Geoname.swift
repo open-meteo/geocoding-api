@@ -1,14 +1,11 @@
 import Foundation
 import Vapor
 
-
-/**
- Loads the main geonames table.
- 
- Fields timezones, featureCodes and countryIso2 are highly redundant the kept in separat arrays to reduce memory.
- 
- Admin codes 1 to 4 are hashed and kept as a lookup table to the representative geonameid
- */
+/// Loads the main geonames table.
+///
+/// Fields timezones, featureCodes and countryIso2 are highly redundant the kept in separat arrays to reduce memory.
+///
+/// Admin codes 1 to 4 are hashed and kept as a lookup table to the representative geonameid
 extension GeocodingDatabase.Geonames {
     /**
      The main 'geoname' table has the following fields :
@@ -36,20 +33,20 @@ extension GeocodingDatabase.Geonames {
     init(data: Data, alternativeNames: AlternateNames, logger: Logger) {
         let start = Date()
         logger.info("Geonames: Start loading")
-        
+
         var timeszones = DeduplicatedStrings<Int32>()
         //var featureCodes = DeduplicatedStrings<Int32>()
         //var countryIso2 = DeduplicatedStrings<Int32>()
         var geonames = [Int32: GeocodingDatabase.Geoname]()
-        
+
         var admin1ToGeonameId = [Int: Int32]()
         var admin2ToGeonameId = [Int: Int32]()
         var admin3ToGeonameId = [Int: Int32]()
         var admin4ToGeonameId = [Int: Int32]()
         var countries = [String: Int32]()
-        
+
         let tab = Character("\t").asciiValue!
-        
+
         /// first pass, look for admin areas and count how many geonames we are about to index
         var count = 0
         data.forEachLine { line in
@@ -66,22 +63,21 @@ extension GeocodingDatabase.Geonames {
             let _ = line.seekUntil(value: tab, offset: &offset)
             let positionFeatureCode = line.seekUntil(value: tab, offset: &offset)
             let positionCountryCode = line.seekUntil(value: tab, offset: &offset)
-            let _ = line.seekUntil(value: tab, offset: &offset) // positionCC2
+            let _ = line.seekUntil(value: tab, offset: &offset)  // positionCC2
             let positionAdmin1 = line.seekUntil(value: tab, offset: &offset)
             let positionAdmin2 = line.seekUntil(value: tab, offset: &offset)
             let positionAdmin3 = line.seekUntil(value: tab, offset: &offset)
             let positionAdmin4 = line.seekUntil(value: tab, offset: &offset)
-            
+
             let featureCode = positionFeatureCode.string
             if !Self.includeGeoname(featureCode: featureCode) {
                 return
             }
-            
+
             count += 1
-            
+
             let geonameid = positionGeonameid.asciiToInt32
-            
-            
+
             // If the geoname is a administrative area, store the reference
             if featureCode == "ADM1" {
                 let admin1Hash = positionCountryCode.extendUntil(positionAdmin1).hashValue
@@ -103,11 +99,11 @@ extension GeocodingDatabase.Geonames {
                 countries[positionCountryCode.string] = geonameid
             }
         }
-        
+
         logger.info("Geonames: Reserving memory for \(count) entries")
         geonames.reserveCapacity(count)
         logger.info("Geonames: Start reading")
-        
+
         data.forEachLine { line in
             if line.isEmpty {
                 return
@@ -115,14 +111,14 @@ extension GeocodingDatabase.Geonames {
             var offset = 0
             let positionGeonameid = line.seekUntil(value: tab, offset: &offset)
             let positionName = line.seekUntil(value: tab, offset: &offset)
-            let _ = line.seekUntil(value: tab, offset: &offset) // positionAsciiname
-            let _ = line.seekUntil(value: tab, offset: &offset) // positionAlterenateName
+            let _ = line.seekUntil(value: tab, offset: &offset)  // positionAsciiname
+            let _ = line.seekUntil(value: tab, offset: &offset)  // positionAlterenateName
             let positionLatitude = line.seekUntil(value: tab, offset: &offset)
             let positionLongitude = line.seekUntil(value: tab, offset: &offset)
-            let _ = line.seekUntil(value: tab, offset: &offset) // positionFeatureClass
+            let _ = line.seekUntil(value: tab, offset: &offset)  // positionFeatureClass
             let positionFeatureCode = line.seekUntil(value: tab, offset: &offset)
             let positionCountryCode = line.seekUntil(value: tab, offset: &offset)
-            let _ = line.seekUntil(value: tab, offset: &offset) // positionCC2
+            let _ = line.seekUntil(value: tab, offset: &offset)  // positionCC2
             let positionAdmin1 = line.seekUntil(value: tab, offset: &offset)
             let positionAdmin2 = line.seekUntil(value: tab, offset: &offset)
             let positionAdmin3 = line.seekUntil(value: tab, offset: &offset)
@@ -131,32 +127,31 @@ extension GeocodingDatabase.Geonames {
             let positionElevation = line.seekUntil(value: tab, offset: &offset)
             let positionDEM = line.seekUntil(value: tab, offset: &offset)
             let positionTimezone = line.seekUntil(value: tab, offset: &offset)
-            
+
             let featureCode = positionFeatureCode.string
             if !Self.includeGeoname(featureCode: featureCode) {
                 return
             }
-            
+
             let geonameid = positionGeonameid.asciiToInt32
             let name = positionName.string
-        
+
             let latitude = Float(positionLatitude.string)!
             let longitude = Float(positionLongitude.string)!
             //let featureClass = line[positionLongitude ..< positionFeatureClass].first ?? 0
             let countryCode = positionCountryCode.string
             /// We do not need the actual value, just a hash to test if it is equal is fine
-            
+
             let admin1 = admin1ToGeonameId[positionCountryCode.extendUntil(positionAdmin1).hashValue] ?? 0
             let admin2 = admin2ToGeonameId[positionCountryCode.extendUntil(positionAdmin2).hashValue] ?? 0
             let admin3 = admin3ToGeonameId[positionCountryCode.extendUntil(positionAdmin3).hashValue] ?? 0
             let admin4 = admin4ToGeonameId[positionCountryCode.extendUntil(positionAdmin4).hashValue] ?? 0
             let countryID = countries[countryCode] ?? 0
-            
+
             let population = positionPopulation.asciiToUInt32
             let elevation = positionElevation.isEmpty ? positionDEM.asciiToInt16 : positionElevation.asciiToInt16
             let timezone = positionTimezone
-        
-            
+
             var ranking = Self.populationToRank(population)
             let postcodes = alternativeNames.postcodes[geonameid] ?? []
 
@@ -201,15 +196,15 @@ extension GeocodingDatabase.Geonames {
             g.postcodes = postcodes
             geonames[geonameid] = g
         }
-        
+
         precondition(geonames.count == count)
-        
+
         var languagesMap = [String: UInt16]()
         languagesMap.reserveCapacity(alternativeNames.languages.count)
         for (id, language) in alternativeNames.languages.enumerated() {
             languagesMap[language] = UInt16(id)
         }
-        
+
         self.geonames = geonames
         self.timezones = timeszones.strings
         //self.countryIso2 = countryIso2.strings
@@ -217,93 +212,39 @@ extension GeocodingDatabase.Geonames {
         self.languages = alternativeNames.languages
         //self.countries = countries
         //self.languagesMap = languagesMap
-        
-        logger.info("Geonames: Finished loading in \(Date().timeIntervalSince(start)) seconds, \(geonames.count) entries")
+
+        logger.info(
+            "Geonames: Finished loading in \(Date().timeIntervalSince(start)) seconds, \(geonames.count) entries"
+        )
     }
-    
+
     func includeInSearchIndex(featureCode: String) -> Bool {
         //let featureCode = featureCodes[Int(geoname.featureCodeId)]
         switch featureCode {
-        case "PCL": fallthrough
-        case "ADM1": fallthrough
-        case "ADM2": fallthrough
-        case "ADM3": fallthrough
-        case "ADM4": fallthrough
-        case "ADM5": fallthrough
-        case "LTER": fallthrough
-        case "PRSH": fallthrough
-        case "TERR": fallthrough
-        case "ZN": fallthrough
-        case "ZNB": return false
+        case "PCL", "ADM1", "ADM2", "ADM3", "ADM4", "ADM5", "LTER", "PRSH", "TERR", "ZN", "ZNB": return false
         default: return true
         }
     }
-    
+
     /// Whether or not to include feature codes from loading
     static func includeGeoname(featureCode: String) -> Bool {
         switch featureCode {
-        case "ADM1": fallthrough
-        case "ADM2": fallthrough
-        case "ADM3": fallthrough
-        case "ADM4": fallthrough
-        case "ADM5": fallthrough
-        case "PCLI": fallthrough
-        case "PCLD": fallthrough
-        case "PCLIX": fallthrough
-        case "PCLS": fallthrough
-        case "PCLF": fallthrough
-        case "PCL": fallthrough
-        case "PPL": fallthrough
-        case "PPLL": fallthrough
-        case "PPLC": fallthrough
-        case "PPLA": fallthrough
-        case "PPLA2": fallthrough
-        case "PPLA3": fallthrough
-        case "PPLA4": fallthrough
-        case "PPLX": fallthrough
-        case "PPLS": fallthrough
-        case "PPLCH": fallthrough
-        case "PPLG": fallthrough
-        case "AMUS": fallthrough
-        case "AIRP": fallthrough
-        case "MT": fallthrough
-        case "MTS": fallthrough
-        case "PK": fallthrough
-        case "PKS": fallthrough
-        case "PAN": fallthrough
-        case "PANS": fallthrough
-        case "PASS": fallthrough
-        case "VALL": fallthrough
-        case "VALX": fallthrough
-        case "VALG": fallthrough
-        case "VALS": fallthrough
-        case "FLLS": fallthrough
-        case "DAM": fallthrough
-        case "PRK": fallthrough
-        case "GLCR": fallthrough
-        case "CONT": fallthrough
-        case "UPLD": fallthrough
-        case "ISL": fallthrough
-        case "ISLET": fallthrough
-        case "ISLF": fallthrough
-        case "ISLM": fallthrough
-        case "ISLS": fallthrough
-        case "ISLT": fallthrough
-        case "CAPE": fallthrough
-        case "AIRF": fallthrough
-        case "AIRB": fallthrough
-        case "AIRH": return true
+        case "ADM1", "ADM2", "ADM3", "ADM4", "ADM5", "PCLI", "PCLD", "PCLIX", "PCLS", "PCLF", "PCL", "PPL", "PPLL",
+            "PPLC", "PPLA", "PPLA2", "PPLA3", "PPLA4", "PPLX", "PPLS", "PPLCH", "PPLG", "AMUS", "AIRP", "MT", "MTS",
+            "PK", "PKS", "PAN", "PANS", "PASS", "VALL", "VALX", "VALG", "VALS", "FLLS", "DAM", "PRK", "GLCR", "CONT",
+            "UPLD", "ISL", "ISLET", "ISLF", "ISLM", "ISLS", "ISLT", "CAPE", "AIRF", "AIRB", "AIRH":
+            return true
         default: return false
         }
     }
-    
+
     // Rank higher popoluation counts higher
     static func populationToRank(_ population: UInt32) -> Float {
         if population <= 0 {
             return 0
         }
         let a: Float = 1.0
-        let t: Float = -1.0/50000
+        let t: Float = -1.0 / 50000
         let b: Float = 25.0
         let e: Float = 2.7182818284590452353602874
         let rank = a / (1 + b * powf(e, t * Float(population)))
@@ -311,13 +252,11 @@ extension GeocodingDatabase.Geonames {
     }
 }
 
-/**
- Helper to quickly index large amounts of duplicate strings
- */
+/// Helper to quickly index large amounts of duplicate strings
 struct DeduplicatedStrings<T: SignedInteger> {
     var strings = [String]()
     var positions = [Int: T]()
-    
+
     mutating func findOrAppend(_ element: UnsafeRawBufferPointer) -> T {
         if let index = positions[element.hashValue] {
             return index

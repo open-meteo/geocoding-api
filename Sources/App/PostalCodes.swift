@@ -1,7 +1,6 @@
 import Foundation
 import Vapor
 
-
 struct PostalCodes {
     /**
      country code      : iso country code, 2 characters
@@ -21,14 +20,14 @@ struct PostalCodes {
         let start = Date()
         logger.info("Postal codes: Start loading")
         //let tab = Character("\t").asciiValue!
-        
+
         data.forEachLine { line in
             if line.isEmpty {
                 return
             }
             // TODO need implemtation
             /*var offset = 0
-                        
+
             let countryCode = line.seekUntil(value: tab, offset: &offset)
             let postalCode = line.seekUntil(value: tab, offset: &offset).string
             let placeName = line.seekUntil(value: tab, offset: &offset)
