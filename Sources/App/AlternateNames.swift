@@ -115,7 +115,7 @@ extension Array where Element == AlternateName {
         var preferredShort: String? = nil
         var preferred: String? = nil
         var short: String? = nil
-        var modern: String? = nil
+        var other: String? = nil
         var historic: String? = nil
 
         for alternate in self.reversed() {
@@ -136,9 +136,9 @@ extension Array where Element == AlternateName {
                 short = alternate.alternateName
                 continue
             }
-            modern = alternate.alternateName
+            other = alternate.alternateName
         }
 
-        return preferredShort ?? preferred ?? short ?? modern ?? historic ?? ""
+        return preferredShort ?? preferred ?? short ?? other ?? historic ?? ""
     }
 }
