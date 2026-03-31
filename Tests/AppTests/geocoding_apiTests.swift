@@ -108,6 +108,7 @@ final class geocoding_apiTests: XCTestCase {
     }
 
     func testExample() throws {
+        // TODO: This test needs to be improved
         let logger = Logger(label: "test")
         let names = AlternateNames(data: "".data(using: .utf8)!, logger: logger)
         let data2 = """
