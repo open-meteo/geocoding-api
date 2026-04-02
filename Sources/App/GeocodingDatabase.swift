@@ -3,7 +3,7 @@ import Vapor
 
 extension GeocodingDatabase {
     static let geonamesFile = URL(fileURLWithPath: "data/allCountries.txt")
-    static let alternateNamesFiles = URL(fileURLWithPath: "data/alternateNames.txt")
+    static let alternateNamesFiles = URL(fileURLWithPath: "data/alternateNamesV2.txt")
     static let databaseFile = URL(fileURLWithPath: "data/database.bin")
 
     /// Read geonames txt files and create an index protobuf file

@@ -14,7 +14,7 @@ Todo:
 The standalone `geocodingapi` binary can run on any 64-bit linux with recent libc. Currently only basic installation instructions for ubuntu 22.04 are available. Later Docker and others can be provided.
 
 ```bash
-api install zip
+apt install zip
 
 wget https://github.com/open-meteo/geocoding-api/releases/download/0.1.1/geocoding-api_0.0.6_jammy_amd64.deb
 dpkg -i geocoding-api_0.1.1_jammy_amd64.deb
@@ -23,11 +23,9 @@ mkdir /var/lib/geocoding-api/data
 cd /var/lib/geocoding-api/data
 mkdir zip
 curl http://download.geonames.org/export/dump/allCountries.zip -o allCountries.zip
-curl http://download.geonames.org/export/dump/alternateNames.zip -o alternateNames.zip
-curl http://download.geonames.org/export/zip/allCountries.zip -o zip/allCountries.zip
+curl http://download.geonames.org/export/dump/alternateNamesV2.zip -o alternateNamesV2.zip
 unzip allCountries.zip
-unzip alternateNames.zip
-cd zip; unzip allCountries.zip; cd ..
+unzip alternateNamesV2.zip
 
 systemctl enable geocoding-api.service
 systemctl start geocoding-api.service

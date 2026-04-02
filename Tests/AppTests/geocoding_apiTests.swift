@@ -32,7 +32,7 @@ final class geocoding_apiTests: XCTestCase {
         XCTAssertEqual(q.queue[4].id, 5)
     }
 
-    func testExample() throws {
+    func testZugspitze() throws {
         let logger = Logger(label: "test")
         let data = """
             1639953\t2760454\tja\tツークシュピッツェ\t\t\t\t\t\t
@@ -63,8 +63,54 @@ final class geocoding_apiTests: XCTestCase {
 
         let names = AlternateNames(data: data, logger: logger)
         XCTAssertEqual(names.alternativesPreferred.count, 1)
-        XCTAssertEqual(names.alternativesPreferred[2_760_454]?.count, 21)
+        XCTAssertEqual(names.alternativesPreferred[2_760_454]!.count, 21)
+        XCTAssertEqual(
+            names.languages,
+            [
+                "ja", "nl", "pt", "sk", "sv", "tr", "it", "fa", "uk", "bar", "ko", "he", "mr", "be",
+                "ka", "pnb", "lt", "ru", "zh", "ar", "mk",
+            ]
+        )
+        XCTAssertEqual(
+            names.alternativesPreferred[2_760_454]![
+                Int32(names.languages.firstIndex(of: "nl")!)
+            ]!,
+            "Zugspitze"
+        )
+    }
 
+    func testTallinnDoNotUseHistoricNames() throws {
+        // https://github.com/open-meteo/geocoding-api/issues/19
+        let logger = Logger(label: "test")
+        let data = """
+            343021\t588409\t\tKolyvan\t\t\t\t\t\t
+            343022\t588409\t\tRevel'\t\t\t\t\t\t
+            343023\t588409\t\tKallinn\t\t\t\t\t\t
+            343024\t588409\t\tTallin\t\t\t\t\t\t
+            343026\t588409\t\tTallina\t\t\t\t\t\t
+            343027\t588409\t\tReval\t\t\t\t1\t1219\t1918
+            343028\t588409\t\tTalinas\t\t\t\t\t\t
+            343029\t588409\t\tTallinna\t\t\t\t\t\t
+            1894606\t588409\tde\tTallinn\t1\t\t\t\t\t
+            1894607\t588409\ten\tTallinn\t\t\t\t\t\t
+            11947298\t588409\tde\tReval\t\t\t\t1\t1219\t1918
+            16401504\t588409\ten\tRevel\t\t\t\t1\t1219\t1918
+            """.data(using: .utf8)!
+
+        let names = AlternateNames(data: data, logger: logger)
+        XCTAssertEqual(names.alternativesPreferred.count, 1)
+        XCTAssertEqual(names.alternativesPreferred[588409]!.count, 3)
+        XCTAssertEqual(names.languages, ["", "de", "en"])
+        XCTAssertEqual(
+            names.alternativesPreferred[588409]![Int32(names.languages.firstIndex(of: "en")!)]!,
+            "Tallinn"
+        )
+    }
+
+    func testExample() throws {
+        // TODO: This test needs to be improved
+        let logger = Logger(label: "test")
+        let names = AlternateNames(data: "".data(using: .utf8)!, logger: logger)
         let data2 = """
             1529666\tBahnhof Grenzau\tBahnhof Grenzau\tBahnhof Grenzau,Grenzau\t50.45663\t7.66505\tS\tRSTN\tDE\t\t08\t00\t07143\t07143032\t0\t\t232\tEurope/Berlin\t2020-10-14
             2038682\tBahnhof Annaburg\tBahnhof Annaburg\tAnnaburg,Bahnhof Annaburg,Bahnhof Annaburg West\t51.72858\t13.03311\tS\tRSTN\tDE\t\t11\t\t\t\t0\t\t77\tEurope/Berlin\t2020-10-14
