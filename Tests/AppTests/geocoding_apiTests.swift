@@ -1,14 +1,18 @@
-import XCTest
-@testable import App
 import Vapor
+import XCTest
+
+@testable import App
 
 final class geocoding_apiTests: XCTestCase {
-    
+
     func testUnicodeNormalisation() {
-        let a = "Rügen caractères spéciaux contrairement à la langue française".folding(options: .diacriticInsensitive, locale: nil).lowercased()
+        let a = "Rügen caractères spéciaux contrairement à la langue française".folding(
+            options: .diacriticInsensitive,
+            locale: nil
+        ).lowercased()
         XCTAssertEqual(a, "rugen caracteres speciaux contrairement a la langue francaise")
     }
-    
+
     func testPriorityQueue() {
         let q = PriorityQueue(length: 5)
         q.insert(id: 1, priority: 0.5)
@@ -27,7 +31,7 @@ final class geocoding_apiTests: XCTestCase {
         XCTAssertEqual(q.queue[3].id, 4)
         XCTAssertEqual(q.queue[4].id, 5)
     }
-    
+
     func testExample() throws {
         let logger = Logger(label: "test")
         let data = """
@@ -56,11 +60,11 @@ final class geocoding_apiTests: XCTestCase {
             11324585\t2760454\tmk\tЦугшпице\t\t\t\t\t\t
             15440607\t2760454\twkdt\tQ3375\t\t\t\t\t
             """.data(using: .utf8)!
-        
+
         let names = AlternateNames(data: data, logger: logger)
         XCTAssertEqual(names.alternativesPreferred.count, 1)
-        XCTAssertEqual(names.alternativesPreferred[2760454]?.count, 21)
-        
+        XCTAssertEqual(names.alternativesPreferred[2_760_454]?.count, 21)
+
         let data2 = """
             1529666\tBahnhof Grenzau\tBahnhof Grenzau\tBahnhof Grenzau,Grenzau\t50.45663\t7.66505\tS\tRSTN\tDE\t\t08\t00\t07143\t07143032\t0\t\t232\tEurope/Berlin\t2020-10-14
             2038682\tBahnhof Annaburg\tBahnhof Annaburg\tAnnaburg,Bahnhof Annaburg,Bahnhof Annaburg West\t51.72858\t13.03311\tS\tRSTN\tDE\t\t11\t\t\t\t0\t\t77\tEurope/Berlin\t2020-10-14
@@ -71,15 +75,15 @@ final class geocoding_apiTests: XCTestCase {
             2744666\tWesterwoldsche A\tWesterwoldsche A\tWesterwoldsche A,Westerwoldsche Aa,Westerwoldse Aa\t53.23333\t7.2\tH\tSTMC\tDE\t\t00\t\t\t\t0\t\t-1\tEurope/Amsterdam\t2014-08-05
             2745605\tHoge Veenkanal\tHoge Veenkanal\tHoge Veenkanal,Verlangde Hoogeveensche Vaart,Verlengde Hoogeveensche Vaart,Verlengde Hoogeveense Vaart\t52.73333\t6.51667\tH\tCNL\tDE\t\t00\t\t\t\t0\t\t12\tEurope/Amsterdam\t2014-08-05
             """.data(using: .utf8)!
-        
+
         let geonames = GeocodingDatabase.Geonames(data: data2, alternativeNames: names, logger: logger)
         XCTAssertEqual(geonames.geonames.count, 1)
-        
+
         /*let tree = SearchTree.load(geonames: geonames)
         let res = tree.search(Substring("Bahn"))
         XCTAssertEqual(res, [1529666, 2038682])*/
     }
-    
+
     func testPopulationRanking() {
         XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(0), 0)
         XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(10), 0.038468935)
@@ -89,8 +93,8 @@ final class geocoding_apiTests: XCTestCase {
         XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(100000), 0.22813433)
         XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(200000), 0.6859223)
         XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(500000), 0.9988663)
-        XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(1000000), 1.0)
-        XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(2000000), 1.0)
-        XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(10000000), 1.0)
+        XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(1_000_000), 1.0)
+        XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(2_000_000), 1.0)
+        XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(10_000_000), 1.0)
     }
 }

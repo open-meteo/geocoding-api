@@ -1,7 +1,6 @@
 import Foundation
-import Vapor
 import SwiftProtobuf
-
+import Vapor
 
 enum ProtobufSerializationFormat: String, Codable {
     case json

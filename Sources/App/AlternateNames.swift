@@ -1,12 +1,11 @@
 import Foundation
 import Vapor
 
-
 struct AlternateNames {
     let alternativesPreferred: [Int32: [Int32: String]]
     let postcodes: [Int32: [String]]
     let languages: [String]
-    
+
     /**
      The table 'alternate names' :
      -----------------------------
@@ -25,18 +24,18 @@ struct AlternateNames {
         let start = Date()
         logger.info("Alternative names: Start loading")
         let tab = Character("\t").asciiValue!
-                
+
         var languages = DeduplicatedStrings<Int32>()
         var alternateNames = [Int32: [AlternateName]]()
         var postcodes = [Int32: [String]]()
-                
+
         data.forEachLine { line in
             if line.isEmpty {
                 return
             }
             var offset = 0
-                        
-            let _ = line.seekUntil(value: tab, offset: &offset) // alternatenameid
+
+            let _ = line.seekUntil(value: tab, offset: &offset)  // alternatenameid
             let geonameid = line.seekUntil(value: tab, offset: &offset).asciiToInt32
             let isolanguage = line.seekUntil(value: tab, offset: &offset)
             let alternateName = line.seekUntil(value: tab, offset: &offset).string
@@ -44,17 +43,17 @@ struct AlternateNames {
             let isShortName = line.seekUntil(value: tab, offset: &offset).asciiToInt8
             let isColloquial = line.seekUntil(value: tab, offset: &offset).asciiToInt8
             //let isHistoric = line[line.seekUntil(value: tab, offset: &offset)].asciiToInt8
-            
+
             let isolanguageString = isolanguage.string
-            
+
             if isolanguageString == "link" || isolanguageString == "wkdt" || isolanguageString == "fr_1793" {
                 return
             }
-            
-            if  isColloquial == 1 { //isHistoric == 1 ||
+
+            if isColloquial == 1 {  //isHistoric == 1 ||
                 return
             }
-            
+
             if isolanguageString == "post" {
                 if postcodes[geonameid] == nil {
                     postcodes[geonameid] = [alternateName]
@@ -63,7 +62,7 @@ struct AlternateNames {
                 }
                 return
             }
-            
+
             let alternateNameStruct = AlternateName(
                 //geonameid: geonameid,
                 languageId: languages.findOrAppend(isolanguage),
@@ -71,37 +70,37 @@ struct AlternateNames {
                 isPreferredeName: isPreferredName != 0,
                 isShortName: isShortName != 0
             )
-            
+
             if alternateNames[geonameid] != nil {
                 alternateNames[geonameid]?.append(alternateNameStruct)
             } else {
                 alternateNames[geonameid] = [alternateNameStruct]
             }
         }
-        
+
         var alternativesPreferred = [Int32: [Int32: String]]()
         alternativesPreferred.reserveCapacity(alternateNames.count)
         for (id, names) in alternateNames {
             /// For each langauge, find tthe most suitable alternativeName. Prefer short ones
-            let languageIds = names.unique(of: {$0.languageId})
+            let languageIds = names.unique(of: { $0.languageId })
             var res = [Int32: String]()
             res.reserveCapacity(languageIds.count)
             for languageId in languageIds {
-                let perLanguage = names.filter({$0.languageId == languageId })
+                let perLanguage = names.filter({ $0.languageId == languageId })
                 res[languageId] = perLanguage.getPreferred()
             }
             alternativesPreferred[id] = res
         }
-        
+
         self.languages = languages.strings
         self.alternativesPreferred = alternativesPreferred
         self.postcodes = postcodes
-        
+
         logger.info("Alternative names: Finished loading in \(Date().timeIntervalSince(start)) seconds")
     }
 }
 
-fileprivate struct AlternateName {
+private struct AlternateName {
     //let geonameid: Int32
     let languageId: Int32
     let alternateName: String
