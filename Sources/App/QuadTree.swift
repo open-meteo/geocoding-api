@@ -1,7 +1,7 @@
 import Foundation
 import Vapor
 
-protocol QuadTreeElement {
+public protocol QuadTreeElement {
     var latitude: Float { get }
     var longitude: Float { get }
 }

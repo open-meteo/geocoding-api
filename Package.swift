@@ -1,4 +1,4 @@
-// swift-tools-version:5.3
+// swift-tools-version:5.5
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -19,13 +19,21 @@ let package = Package(
                 .product(name: "Vapor", package: "vapor"),
                 "SwiftProtobuf",
             ],
+            resources: [
+                .process("database.proto"),
+                .process("api.proto"),
+                .process("swift-protobuf-config.json"),
+            ],
             swiftSettings: [
                 .unsafeFlags(["-cross-module-optimization"], .when(configuration: .release)),
                 .unsafeFlags(["-enable-testing"], .when(configuration: .release)),
                 .unsafeFlags(["-Ounchecked"], .when(configuration: .release)),
-            ]
+            ],
+            plugins: [
+                .plugin(name: "SwiftProtobufPlugin", package: "swift-protobuf")
+            ],
         ),
-        .target(name: "Run", dependencies: [.target(name: "App")]),
+        .executableTarget(name: "Run", dependencies: [.target(name: "App")]),
         .testTarget(
             name: "AppTests",
             dependencies: ["App"]
