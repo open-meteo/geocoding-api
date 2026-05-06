@@ -1,9 +1,0 @@
-{
-  "protoc": "protoc",
-  "invocations": [
-    {
-      "protoFiles": ["api.proto", "database.proto"],
-      "visibility": "public"
-    }
-  ]
-}
