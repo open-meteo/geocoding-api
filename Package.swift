@@ -19,11 +19,11 @@ let package = Package(
                 .product(name: "Vapor", package: "vapor"),
                 "SwiftProtobuf",
             ],
+            exclude: ["ProtoResources/"],
             swiftSettings: [
                 .unsafeFlags(["-cross-module-optimization"], .when(configuration: .release)),
-                .unsafeFlags(["-enable-testing"], .when(configuration: .release)),
                 .unsafeFlags(["-Ounchecked"], .when(configuration: .release)),
-            ]
+            ],
         ),
         .target(name: "Run", dependencies: [.target(name: "App")]),
         .testTarget(
