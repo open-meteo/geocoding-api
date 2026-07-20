@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DATA_DIR=${DATA_DIR:-/app/data}
+DATA_DIR=/app/data
 GEONAMES_DUMP_URL=${GEONAMES_DUMP_URL:-https://download.geonames.org/export/dump}
 FORCE_REFRESH=${FORCE_REFRESH:-0}
 DATABASE_FILE="$DATA_DIR/database.bin"
