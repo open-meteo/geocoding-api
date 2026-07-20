@@ -23,7 +23,7 @@ jobs:
     - name: Get Swift Version
       id: get-swift-version
       run: |
-        echo "::set-output name=version::$(swift -version | head -n 1 | sed s/,// )"
+        echo "version=$(swift -version | head -n 1 | sed s/,// )" >> "$GITHUB_OUTPUT"
       shell: bash
     - uses: actions/checkout@v7
     - name: Cache resolved dependencies
