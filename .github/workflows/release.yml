@@ -22,12 +22,12 @@ jobs:
       run: |
         echo "::set-output name=version::$(swift -version | head -n 1 | sed s/,// )"
       shell: bash
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Copy Swift Backtrace
       run: cp /usr/libexec/swift/linux/swift-backtrace-static ./swift-backtrace
     - name: Cache resolved dependencies
       id: cache-resolved-dependencies
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           .build
