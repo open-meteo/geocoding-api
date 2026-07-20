@@ -11,8 +11,8 @@ WORKDIR /build
 COPY ./Package.* ./
 RUN swift package resolve
 
-# Copy entire repo into container
-COPY . .
+# Copy only files needed for compilation
+COPY Sources ./Sources
 
 # Compile with optimizations
 RUN swift build -c release --product Run \
