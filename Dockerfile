@@ -11,17 +11,11 @@ WORKDIR /build
 COPY ./Package.* ./
 RUN swift package resolve
 
-# Compile dependencies before application sources enter the cache key.
-RUN mkdir -p Sources/App/ProtoResources Sources/Run Sources/PrepareDatabase Tests/AppTests \
-    && touch Sources/App/placeholder.swift Sources/Run/main.swift Sources/PrepareDatabase/main.swift Tests/AppTests/placeholder.swift
-RUN swift build -c release --product Run \
-    && swift build -c release --product PrepareDatabase
-RUN rm -rf Sources
-
-# Copy only files needed for application compilation.
+# Copy only files needed for package validation and compilation.
 COPY Sources ./Sources
+COPY Tests ./Tests
 
-# Compile and link the application against the cached dependencies.
+# Compile with optimizations.
 RUN swift build -c release --product Run \
     && swift build -c release --product PrepareDatabase
 

@@ -43,29 +43,3 @@ jobs:
       run: ${{ env.swift_build }}
     - name: Test
       run: ${{ env.swift_test }}
-
-  docker:
-    runs-on: ubuntu-22.04
-    name: Docker
-    steps:
-    - uses: actions/checkout@v7
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
-    - name: Build API image
-      uses: docker/build-push-action@v7
-      with:
-        context: .
-        target: runtime
-        tags: geocoding-api:test
-        cache-from: type=gha,scope=geocoding-api
-
-    - name: Build data initialization image
-      uses: docker/build-push-action@v7
-      with:
-        context: .
-        target: data-init
-        tags: geocoding-api-data-init:test
-        cache-from: type=gha,scope=geocoding-api
-        cache-to: type=gha,scope=geocoding-api,mode=max
