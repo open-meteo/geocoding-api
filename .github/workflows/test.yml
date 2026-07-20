@@ -17,7 +17,7 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-22.04
-    container: swift:6.2.4-jammy
+    container: swift:6.1.0-jammy
     name: Linux
     steps:
     - name: Get Swift Version
@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-22.04
     name: Docker
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Build API image
       run: docker build --target runtime --tag geocoding-api:test .
     - name: Build data initialization image
