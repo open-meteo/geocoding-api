@@ -40,9 +40,40 @@ extension GeocodingDatabase {
     }
 
     /// Search for a string in the indexed location names and one language index
-    public func search(_ searchString: String, languageId: Int32, maxCount: Int) -> [(Int32, Float)] {
+    func search(
+        _ searchString: String,
+        languageId: Int32,
+        maxCount: Int,
+        countryCode: String? = nil,
+        administrativeArea: AdministrativeAreaLookup.Resolution? = nil
+    ) -> [(Int32, Float)] {
         let stripped = searchString.folding(options: .diacriticInsensitive, locale: nil).lowercased()
-        let results = PriorityQueue(length: maxCount)
+        let normalizedCountryCode =
+            countryCode?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        let results: PriorityQueue
+        if normalizedCountryCode == nil && administrativeArea == nil {
+            results = PriorityQueue(length: maxCount)
+        } else {
+            let geonamesByID = geonames.geonames
+            results = PriorityQueue(
+                length: maxCount,
+                accepts: { id in
+                    guard let geoname = geonamesByID[id] else {
+                        return false
+                    }
+                    if let normalizedCountryCode, geoname.countryIso2 != normalizedCountryCode {
+                        return false
+                    }
+                    if let administrativeArea {
+                        return administrativeArea.admin1IDs.contains(geoname.admin1ID)
+                            || administrativeArea.countryCodes.contains(geoname.countryIso2)
+                    }
+                    return true
+                }
+            )
+        }
         let onlyExact = searchString.count <= 2
         index.search(Substring(stripped), results: results, onlyExact: onlyExact, geonames: geonames.geonames)
         languageIndex[Int(languageId)].search(

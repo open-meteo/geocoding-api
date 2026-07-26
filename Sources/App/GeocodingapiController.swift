@@ -16,9 +16,15 @@ import Vapor
 
 struct GeocodingapiController: RouteCollection {
     let database: GeocodingDatabase
+    let administrativeAreas: AdministrativeAreaLookup
 
     public init(_ app: Application) throws {
-        database = try GeocodingDatabase.loadOrCreate(logger: app.logger)
+        self.init(database: try GeocodingDatabase.loadOrCreate(logger: app.logger))
+    }
+
+    init(database: GeocodingDatabase) {
+        self.database = database
+        self.administrativeAreas = AdministrativeAreaLookup(geonames: database.geonames)
     }
 
     func boot(routes: RoutesBuilder) throws {
@@ -59,46 +65,34 @@ struct GeocodingapiController: RouteCollection {
             database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
         let count = try params.getCount()
 
-        var name = params.name
-        var areaIds: [Int32]?
-        if name.contains(",") {  // Split string by comma, so we can filter the results later by second part
-            let parts = name.components(separatedBy: ",")
-            name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            let areaName = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-            if areaName.count > 1 {
-                areaIds = database.search(areaName, languageId: Int32(languageId), maxCount: 10).compactMap({
-                    guard
-                        ["ADM1", "ADM2", "ADM3", "ADM4", "PCLI"].contains(database.geonames.geonames[$0.0]?.featureCode)
-                    else {
-                        return nil
-                    }
-                    return $0.0
-                })
+        let name: String
+        var administrativeAreaResolution: AdministrativeAreaLookup.Resolution?
+        if let comma = params.name.firstIndex(of: ",") {
+            name = String(params.name[..<comma]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let areaName =
+                String(params.name[params.name.index(after: comma)...])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !areaName.isEmpty {
+                administrativeAreaResolution = administrativeAreas.resolve(
+                    areaName,
+                    languageID: Int32(languageId),
+                    countryCode: params.countryCode
+                )
             }
+        } else {
+            name = params.name.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
-        var results = params.name.count < 2 ? [] : database.search(name, languageId: Int32(languageId), maxCount: count)
-        /// TODO country filter need to be inside database match, because `count` would be wrong otherwise
-        if let countryCode = params.countryCode {
-            /*guard let countryId = searchTree.geonames.countryIso2.firstIndex(of: countryCode) else {
-                throw GeocodingApiError.invalidContryCode
-            }*/
-            results = results.filter({
-                guard let c = database.geonames.geonames[$0.0]?.countryIso2 else {
-                    return false
-                }
-                return c == countryCode
-            })
-        }
-        if let areas = areaIds {
-            results = results.filter({  // Filter the results by second part of the original string
-                return areas.contains(database.geonames.geonames[$0.0]?.admin1ID ?? -1)
-                    || areas.contains(database.geonames.geonames[$0.0]?.admin2ID ?? -1)
-                    || areas.contains(database.geonames.geonames[$0.0]?.admin3ID ?? -1)
-                    || areas.contains(database.geonames.geonames[$0.0]?.admin4ID ?? -1)
-                    || areas.contains(database.geonames.geonames[$0.0]?.countryID ?? -1)
-            })
-        }
+        let results =
+            name.count < 2
+            ? []
+            : database.search(
+                name,
+                languageId: Int32(languageId),
+                maxCount: count,
+                countryCode: params.countryCode,
+                administrativeArea: administrativeAreaResolution
+            )
         let mapped: [GeocodingApi.Geoname] = results.map({
             guard let geoname = database.geonames.getResponse(id: $0.0, languageId: Int32(languageId), searchRank: $0.1)
             else {
