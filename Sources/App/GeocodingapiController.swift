@@ -27,6 +27,20 @@ struct GeocodingapiController: RouteCollection {
         self.administrativeAreas = AdministrativeAreaLookup(geonames: database.geonames)
     }
 
+    static func parseSearchName(_ value: String) -> (name: String, areaName: String?) {
+        guard let comma = value.firstIndex(of: ",") else {
+            return (value.trimmingCharacters(in: .whitespacesAndNewlines), nil)
+        }
+
+        let name = String(value[..<comma]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let areaStart = value.index(after: comma)
+        let areaEnd = value[areaStart...].firstIndex(of: ",") ?? value.endIndex
+        let areaName =
+            String(value[areaStart..<areaEnd])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (name, areaName.isEmpty ? nil : areaName)
+    }
+
     func boot(routes: RoutesBuilder) throws {
         let cors = CORSMiddleware(
             configuration: .init(
@@ -65,31 +79,20 @@ struct GeocodingapiController: RouteCollection {
             database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
         let count = try params.getCount()
 
-        let name: String
-        var administrativeAreaResolution: AdministrativeAreaLookup.Resolution?
-        if let comma = params.name.firstIndex(of: ",") {
-            name = String(params.name[..<comma]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let areaStart = params.name.index(after: comma)
-            let areaEnd = params.name[areaStart...].firstIndex(of: ",") ?? params.name.endIndex
-            let areaName =
-                String(params.name[areaStart..<areaEnd])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !areaName.isEmpty {
-                administrativeAreaResolution = administrativeAreas.resolve(
-                    areaName,
-                    languageID: Int32(languageId),
-                    countryCode: params.countryCode
-                )
-            }
-        } else {
-            name = params.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedName = Self.parseSearchName(params.name)
+        let administrativeAreaResolution = parsedName.areaName.map {
+            administrativeAreas.resolve(
+                $0,
+                languageID: Int32(languageId),
+                countryCode: params.countryCode
+            )
         }
 
         let results =
-            name.count < 2
+            parsedName.name.count < 2
             ? []
             : database.search(
-                name,
+                parsedName.name,
                 languageId: Int32(languageId),
                 maxCount: count,
                 countryCode: params.countryCode,
