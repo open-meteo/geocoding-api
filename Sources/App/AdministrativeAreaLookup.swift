@@ -78,6 +78,7 @@ struct AdministrativeAreaLookup {
 
     init(geonames: GeocodingDatabase.Geonames) {
         let abbreviationLanguageID = geonames.languages.firstIndex(of: "abbr").map(Int32.init)
+        let languageNeutralID = geonames.languages.firstIndex(of: "").map(Int32.init)
         let englishLanguageID = geonames.languages.firstIndex(of: "en").map(Int32.init)
         var idsByCommonAlias = [String: AliasMatches]()
         var idsByLocalizedAlias = [LocalizedAlias: AliasMatches]()
@@ -107,7 +108,7 @@ struct AdministrativeAreaLookup {
                     } else {
                         add(alternativeName, candidate: candidate, to: &idsByCommonAlias)
                     }
-                } else if languageID == englishLanguageID {
+                } else if languageID == languageNeutralID || languageID == englishLanguageID {
                     add(alternativeName, candidate: candidate, to: &idsByCommonAlias)
                 } else {
                     let normalized = Self.normalize(alternativeName)
