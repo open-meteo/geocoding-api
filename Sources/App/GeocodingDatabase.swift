@@ -19,7 +19,7 @@ extension GeocodingDatabase {
         let data: Data = try searchTree.serializedData()
         let start = Date()
         logger.info("Write database to disk")
-        try data.write(to: databaseFile)
+        try data.write(to: databaseFile, options: .atomic)
         logger.info(
             "Database written in \(Date().timeIntervalSince(start)) seconds, size \(ByteCountFormatter().string(fromByteCount: Int64(data.count)))"
         )
@@ -155,4 +155,8 @@ extension GeocodingDatabase {
 
         logger.info("SearchTree: Finished loading in \(Date().timeIntervalSince(start)) seconds")
     }
+}
+
+public func prepareGeocodingDatabase() throws {
+    try GeocodingDatabase.createDatabase(logger: Logger(label: "geocoding-api.prepare-database"))
 }

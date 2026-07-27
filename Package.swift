@@ -26,6 +26,7 @@ let package = Package(
             ],
         ),
         .target(name: "Run", dependencies: [.target(name: "App")]),
+        .target(name: "PrepareDatabase", dependencies: [.target(name: "App")]),
         .testTarget(
             name: "AppTests",
             dependencies: ["App"]
