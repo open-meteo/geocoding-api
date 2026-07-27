@@ -111,12 +111,17 @@ final class SearchTreeLoader {
 /// Order search results by priority
 public final class PriorityQueue {
     public var queue: [(id: Int32, priority: Float)]
+    private let accepts: ((Int32) -> Bool)?
 
-    public init(length: Int) {
+    public init(length: Int, accepts: ((Int32) -> Bool)? = nil) {
         queue = [(Int32, Float)](repeating: (0, 0), count: length)
+        self.accepts = accepts
     }
 
     public func insert(id: Int32, priority: Float) {
+        guard accepts?(id) ?? true else {
+            return
+        }
         // if duplicate id, remove it and then insert like regular
         if let duplicate = queue.firstIndex(where: { $0.id == id }) {
             if queue[duplicate].priority >= priority {
