@@ -69,8 +69,10 @@ struct GeocodingapiController: RouteCollection {
         var administrativeAreaResolution: AdministrativeAreaLookup.Resolution?
         if let comma = params.name.firstIndex(of: ",") {
             name = String(params.name[..<comma]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let areaStart = params.name.index(after: comma)
+            let areaEnd = params.name[areaStart...].firstIndex(of: ",") ?? params.name.endIndex
             let areaName =
-                String(params.name[params.name.index(after: comma)...])
+                String(params.name[areaStart..<areaEnd])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !areaName.isEmpty {
                 administrativeAreaResolution = administrativeAreas.resolve(
