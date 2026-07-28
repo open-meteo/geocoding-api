@@ -18,7 +18,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         let paths = try makeFixture(name: "primary")
         try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20, workers: 1),
+            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
         ).build()
 
@@ -116,7 +116,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         let paths = try makeFixture(name: "administrative-areas")
         try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20, workers: 1),
+            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
         ).build()
 
@@ -212,7 +212,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         )
         try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20, workers: 1),
+            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
         ).build()
 
@@ -233,7 +233,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         let paths = try makeFixture(name: "radix-boundaries")
         try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20, workers: 1),
+            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
         ).build()
 
@@ -335,7 +335,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         let paths = try makeFixture(name: "corrupt-edge")
         try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20, workers: 1),
+            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
         ).build()
 

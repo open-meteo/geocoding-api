@@ -284,7 +284,6 @@ final class GeocodingDatabase: @unchecked Sendable {
                 logger: logger,
                 options: DatabaseBuildOptions(
                     memoryLimitBytes: options.memoryLimitBytes,
-                    workers: options.workers,
                     force: true
                 )
             ).build()

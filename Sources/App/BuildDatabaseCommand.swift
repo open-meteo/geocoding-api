@@ -14,12 +14,6 @@ struct BuildDatabaseCommand: AsyncCommand {
             help: "Approximate total builder memory budget in MiB (default: 1024)."
         )
         var memoryLimitMB: String?
-
-        @Option(
-            name: "workers",
-            help: "Maximum number of partition workers (default: up to 4)."
-        )
-        var workers: String?
     }
 
     let help = "Build the memory-mapped geocoding database from GeoNames source files."
@@ -32,11 +26,6 @@ struct BuildDatabaseCommand: AsyncCommand {
             signature.memoryLimitMB,
             name: "memory-limit-mb",
             default: 1024
-        )
-        let workers = try Self.positiveInteger(
-            signature.workers,
-            name: "workers",
-            default: min(ProcessInfo.processInfo.activeProcessorCount, 4)
         )
         if FileManager.default.fileExists(
             atPath: GeocodingDatabaseBuilder.databaseFile.path
@@ -51,7 +40,6 @@ struct BuildDatabaseCommand: AsyncCommand {
             logger: context.application.logger,
             options: DatabaseBuildOptions(
                 memoryLimitBytes: memoryLimit * 1_048_576,
-                workers: workers,
                 force: signature.force
             )
         ).build()

@@ -9,7 +9,6 @@ import Darwin
 
 struct DatabaseBuildOptions {
     var memoryLimitBytes = 1 << 30
-    var workers = min(ProcessInfo.processInfo.activeProcessorCount, 4)
     var force = false
 }
 
