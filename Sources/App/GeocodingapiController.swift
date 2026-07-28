@@ -6,7 +6,7 @@ import Vapor
  /v1/search?name=Berlin (&country=DE &count=30 &lang=de)  later maybe &page=1
  Queries with 0 or 1 character, return empty results
  2 character only exact match
- 3 character and more fuzzy search
+ 3 characters and more prefix search
 
  // langauge ICAO and IATA also works!
  /v1/get?id=12345 &lang=de
@@ -16,15 +16,18 @@ import Vapor
 
 struct GeocodingapiController: RouteCollection {
     let database: GeocodingDatabase
-    let administrativeAreas: AdministrativeAreaLookup
+    let administrativeAreaResolver: AdministrativeAreaResolver
 
     public init(_ app: Application) throws {
-        self.init(database: try GeocodingDatabase.loadOrCreate(logger: app.logger))
+        try self.init(database: GeocodingDatabase.loadOrCreate(logger: app.logger))
     }
 
-    init(database: GeocodingDatabase) {
+    init(database: GeocodingDatabase) throws {
         self.database = database
-        self.administrativeAreas = AdministrativeAreaLookup(geonames: database.geonames)
+        self.administrativeAreaResolver = try AdministrativeAreaResolver(
+            database: database
+        )
+        _ = database.searchIndex
     }
 
     static func parseSearchName(_ value: String) -> (name: String, areaName: String?) {
@@ -75,15 +78,14 @@ struct GeocodingapiController: RouteCollection {
         let start = Date()
         let params = try request.query.decode(SearchQuery.self)
         let language = params.language ?? "en"
-        let languageId =
-            database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
+        let languageId = database.languageIDs[language] ?? database.languageIDs["en"] ?? 0
         let count = try params.getCount()
 
         let parsedName = Self.parseSearchName(params.name)
         let administrativeAreaResolution = parsedName.areaName.map {
-            administrativeAreas.resolve(
+            administrativeAreaResolver.resolve(
                 $0,
-                languageID: Int32(languageId),
+                languageID: languageId,
                 countryCode: params.countryCode
             )
         }
@@ -91,15 +93,15 @@ struct GeocodingapiController: RouteCollection {
         let results =
             parsedName.name.count < 2
             ? []
-            : database.search(
+            : database.searchIndex.search(
                 parsedName.name,
-                languageId: Int32(languageId),
-                maxCount: count,
+                languageID: languageId,
+                count: count,
                 countryCode: params.countryCode,
                 administrativeArea: administrativeAreaResolution
             )
-        let mapped: [GeocodingApi.Geoname] = results.map({
-            guard let geoname = database.geonames.getResponse(id: $0.0, languageId: Int32(languageId), searchRank: $0.1)
+        let mapped: [GeocodingApi.Geoname] = try results.map({
+            guard let geoname = try database.response(id: $0.0, languageID: languageId)
             else {
                 fatalError("Geoname in search index was not in database.")
             }
@@ -111,54 +113,6 @@ struct GeocodingapiController: RouteCollection {
         return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
     }
 
-    /*func proxmity(_ request: Request) throws -> EventLoopFuture<Response> {
-        struct SearchQuery: Content {
-            let latitude: Float
-            let longitude: Float
-            let language: String?
-            let countryCode: String?
-            let format: ProtobufSerializationFormat?
-            let count: Int?
-
-            func getCount() throws -> Int {
-                let count = self.count ?? 10
-                guard count > 0 && count <= 100 else {
-                    throw GeocodingApiError.invalidCount
-                }
-                return count
-            }
-        }
-        let start = Date()
-        let params = try request.query.decode(SearchQuery.self)
-        let language = params.language ?? "en"
-        let languageId = database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
-        let count = try params.getCount()
-        // TODO ranking by distance OR priority
-        var results = database.proximity(latitude: params.latitude, longitude: params.longitude, maxCount: count, maxDistanceKilometer: 100)
-        /// TODO country filter need to be inside database match, because `count` would be wrong otherwise
-        if let countryCode = params.countryCode {
-            /*guard let countryId = searchTree.geonames.countryIso2.firstIndex(of: countryCode) else {
-                throw GeocodingApiError.invalidContryCode
-            }*/
-            results = results.filter({
-                guard let c = database.geonames.geonames[$0.0]?.countryIso2 else {
-                    return false
-                }
-                return c == countryCode
-            })
-        }
-        let mapped: [GeocodingApi.Geoname] = results.map({
-            guard let geoname = database.geonames.getResponse(id: $0.0, languageId: Int32(languageId), searchRank: $0.1) else {
-                fatalError("Geoname in search index was not in database.")
-            }
-            return geoname
-        })
-        var out = GeocodingApi.SearchResults()
-        out.results = mapped
-        out.generationtimeMs = Float(Date().timeIntervalSince(start)*1000)
-        return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
-    }*/
-
     func get(_ request: Request) throws -> EventLoopFuture<Response> {
         struct GetQuery: Content {
             let id: Int32
@@ -167,10 +121,9 @@ struct GeocodingapiController: RouteCollection {
         }
         let params = try request.query.decode(GetQuery.self)
         let language = params.language ?? "en"
-        let languageId =
-            database.geonames.languages.firstIndex(of: language) ?? database.geonames.languages.firstIndex(of: "en")!
+        let languageId = database.languageIDs[language] ?? database.languageIDs["en"] ?? 0
 
-        guard let out = database.geonames.getResponse(id: params.id, languageId: Int32(languageId), searchRank: 0)
+        guard let out = try database.response(id: params.id, languageID: languageId)
         else {
             throw GeocodingApiError.locationNotFound(id: params.id)
         }
@@ -181,7 +134,6 @@ struct GeocodingapiController: RouteCollection {
 enum GeocodingApiError: Error {
     case locationNotFound(id: Int32)
     case invalidCount
-    //case invalidContryCode
 }
 
 extension GeocodingApiError: AbortError {
@@ -193,49 +145,8 @@ extension GeocodingApiError: AbortError {
         switch self {
         case .locationNotFound(id: _):
             return "Location ID not found."
-        //case .invalidContryCode:
-        //    return "Invalid country code"
         case .invalidCount:
             return "Parameter count must be between 1 and 100."
         }
-    }
-}
-
-extension GeocodingDatabase.Geoname {
-    func getName(languageId: Int32) -> String {
-        return alternativeNames.first(where: { $0.0 == languageId })?.1 ?? name
-    }
-}
-
-extension GeocodingDatabase.Geonames {
-    func getResponse(id: Int32, languageId: Int32, searchRank: Float) -> GeocodingApi.Geoname? {
-        guard let g = geonames[id] else {
-            return nil
-        }
-
-        var out = GeocodingApi.Geoname()
-        out.id = g.id
-        out.name = g.getName(languageId: languageId)
-        out.latitude = g.latitude
-        out.longitude = g.longitude
-        out.elevation = g.elevation
-        out.countryCode = g.countryIso2
-        out.countryID = g.countryID
-        out.country = geonames[g.countryID]?.getName(languageId: languageId) ?? ""
-        out.featureCode = g.featureCode
-        out.admin1ID = g.admin1ID
-        out.admin2ID = g.admin2ID
-        out.admin3ID = g.admin3ID
-        out.admin4ID = g.admin4ID
-        out.admin1 = geonames[g.admin1ID]?.getName(languageId: languageId) ?? ""
-        out.admin2 = geonames[g.admin2ID]?.getName(languageId: languageId) ?? ""
-        out.admin3 = geonames[g.admin3ID]?.getName(languageId: languageId) ?? ""
-        out.admin4 = geonames[g.admin4ID]?.getName(languageId: languageId) ?? ""
-        out.population = g.population
-        out.timezone = timezones[Int(g.timezoneIndex)]
-        out.postcodes = g.postcodes
-        //out.ranking = g.ranking
-        //out.searchRank = searchRank
-        return out
     }
 }

@@ -12,6 +12,11 @@ public func configure(_ app: Application) throws {
     app.http.server.configuration.port = 8912
     #endif
 
+    app.asyncCommands.use(BuildDatabaseCommand(), as: "build-database")
+    if app.environment.commandInput.arguments.first == "build-database" {
+        return
+    }
+
     try routes(app)
 }
 

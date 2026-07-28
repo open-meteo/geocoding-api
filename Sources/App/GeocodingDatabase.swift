@@ -1,158 +1,760 @@
 import Foundation
 import Vapor
 
-extension GeocodingDatabase {
-    static let geonamesFile = URL(fileURLWithPath: "data/allCountries.txt")
-    static let alternateNamesFiles = URL(fileURLWithPath: "data/alternateNamesV2.txt")
-    static let databaseFile = URL(fileURLWithPath: "data/database.bin")
+final class GeocodingDatabase: @unchecked Sendable {
+    static let databaseFile = GeocodingDatabaseBuilder.databaseFile
 
-    /// Read geonames txt files and create an index protobuf file
-    public static func createDatabase(logger: Logger) throws {
-        logger.info("Create new geocoding database")
-        let alternativeNamesData = try Data(contentsOf: alternateNamesFiles, options: [.mappedIfSafe, .uncached])
-        let alternate = AlternateNames(data: alternativeNamesData, logger: logger)
+    let mappedFile: MappedFile
+    let header: DatabaseFileHeader
+    let languages: [String]
+    let timezones: [String]
+    let features: [String]
+    let languageIDs: [String: UInt16]
 
-        let geonamesData = try Data(contentsOf: geonamesFile, options: [.mappedIfSafe, .uncached])
-        let geonames = GeocodingDatabase.Geonames(data: geonamesData, alternativeNames: alternate, logger: logger)
+    private let idToRow: MappedDatabaseSection
+    private let rowToID: MappedDatabaseSection
+    private let latitudeValues: MappedDatabaseSection
+    private let longitudeValues: MappedDatabaseSection
+    private let rankingValues: MappedDatabaseSection
+    private let elevationValues: MappedDatabaseSection
+    private let featureValues: MappedDatabaseSection
+    private let countryValues: MappedDatabaseSection
+    private let countryIDValues: MappedDatabaseSection
+    private let admin1Values: MappedDatabaseSection
+    private let admin2Values: MappedDatabaseSection
+    private let admin3Values: MappedDatabaseSection
+    private let admin4Values: MappedDatabaseSection
+    private let timezoneValues: MappedDatabaseSection
+    private let populationValues: MappedDatabaseSection
+    private let nameOffsets: MappedDatabaseSection
+    private let alternateStarts: MappedDatabaseSection
+    private let alternateCounts: MappedDatabaseSection
+    private let postcodeStarts: MappedDatabaseSection
+    private let postcodeCounts: MappedDatabaseSection
 
-        let searchTree = GeocodingDatabase(geonames: geonames, logger: logger)
-        let data: Data = try searchTree.serializedData()
-        let start = Date()
-        logger.info("Write database to disk")
-        try data.write(to: databaseFile)
-        logger.info(
-            "Database written in \(Date().timeIntervalSince(start)) seconds, size \(ByteCountFormatter().string(fromByteCount: Int64(data.count)))"
-        )
-    }
+    private let canonicalStrings: UnsafeRawBufferPointer
+    private let alternateRecords: UnsafeRawBufferPointer
+    private let alternateStrings: UnsafeRawBufferPointer
+    private let postcodeOffsets: MappedDatabaseSection
+    private let postcodeStrings: UnsafeRawBufferPointer
+    private let rawSections: [DatabaseSectionKind: UnsafeRawBufferPointer]
 
-    public static func loadOrCreate(logger: Logger) throws -> GeocodingDatabase {
-        if !FileManager.default.fileExists(atPath: databaseFile.path) {
-            try Self.createDatabase(logger: logger)
-        }
-        let start = Date()
-        logger.info("Loading existing database...")
-        let data = try Data(contentsOf: URL(fileURLWithPath: "data/database.bin"), options: [.mappedIfSafe, .uncached])
-        let searchTree = try GeocodingDatabase(serializedBytes: data)
-        logger.info(
-            "Finished loading in \(Date().timeIntervalSince(start)) seconds, \(searchTree.geonames.geonames.count) entries"
-        )
-        return searchTree
-    }
+    lazy var searchIndex = PackedRadixSearchIndex(database: self)
 
-    /// Search for a string in the indexed location names and one language index
-    func search(
-        _ searchString: String,
-        languageId: Int32,
-        maxCount: Int,
-        countryCode: String? = nil,
-        administrativeArea: AdministrativeAreaLookup.Resolution? = nil
-    ) -> [(Int32, Float)] {
-        let stripped = searchString.folding(options: .diacriticInsensitive, locale: nil).lowercased()
-        let normalizedCountryCode =
-            countryCode?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .uppercased()
-        let results: PriorityQueue
-        if normalizedCountryCode == nil && administrativeArea == nil {
-            results = PriorityQueue(length: maxCount)
-        } else {
-            let geonamesByID = geonames.geonames
-            results = PriorityQueue(
-                length: maxCount,
-                accepts: { id in
-                    guard let geoname = geonamesByID[id] else {
-                        return false
-                    }
-                    if let normalizedCountryCode, geoname.countryIso2 != normalizedCountryCode {
-                        return false
-                    }
-                    if let administrativeArea {
-                        return administrativeArea.admin1IDs.contains(geoname.admin1ID)
-                            || administrativeArea.countryCodes.contains(geoname.countryIso2)
-                    }
-                    return true
-                }
+    init(url: URL = GeocodingDatabase.databaseFile) throws {
+        let mappedFile = try MappedFile(url: url)
+        let header = try DatabaseFileHeader(mappedFile: mappedFile)
+        self.mappedFile = mappedFile
+        self.header = header
+
+        func fixed(
+            _ kind: DatabaseSectionKind,
+            stride: UInt32,
+            count: UInt64? = nil
+        ) throws -> MappedDatabaseSection {
+            guard let descriptor = header.sections[kind] else {
+                throw DatabaseFormatError.missingSection(kind)
+            }
+            guard descriptor.stride == stride else {
+                throw DatabaseFormatError.invalidSection(
+                    kind,
+                    "expected stride \(stride), found \(descriptor.stride)"
+                )
+            }
+            if let count, descriptor.count != count {
+                throw DatabaseFormatError.invalidSection(
+                    kind,
+                    "expected \(count) values, found \(descriptor.count)"
+                )
+            }
+            guard
+                let compactCount = Int(exactly: descriptor.count),
+                let compactStride = Int(exactly: descriptor.stride)
+            else {
+                throw DatabaseFormatError.invalidSection(kind, "section is too large")
+            }
+            return MappedDatabaseSection(
+                kind: kind,
+                bytes: try mappedFile.bytes(
+                    offset: descriptor.offset,
+                    length: descriptor.length
+                ),
+                count: compactCount,
+                stride: compactStride
             )
         }
-        let onlyExact = searchString.count <= 2
-        index.search(Substring(stripped), results: results, onlyExact: onlyExact, geonames: geonames.geonames)
-        languageIndex[Int(languageId)].search(
-            Substring(stripped),
-            results: results,
-            onlyExact: onlyExact,
-            geonames: geonames.geonames
+
+        func raw(_ kind: DatabaseSectionKind) throws -> UnsafeRawBufferPointer {
+            guard let descriptor = header.sections[kind] else {
+                throw DatabaseFormatError.missingSection(kind)
+            }
+            return try mappedFile.bytes(
+                offset: descriptor.offset,
+                length: descriptor.length
+            )
+        }
+
+        let records = UInt64(header.recordCount)
+        idToRow = try fixed(
+            .idToRow,
+            stride: 4,
+            count: UInt64(header.maximumGeonameID) + 1
         )
-        return results.queue.filter({ $0.id > 0 })
+        rowToID = try fixed(.rowToID, stride: 4, count: records)
+        latitudeValues = try fixed(.latitude, stride: 4, count: records)
+        longitudeValues = try fixed(.longitude, stride: 4, count: records)
+        rankingValues = try fixed(.ranking, stride: 4, count: records)
+        elevationValues = try fixed(.elevation, stride: 2, count: records)
+        featureValues = try fixed(.feature, stride: 1, count: records)
+        countryValues = try fixed(.countryISO2, stride: 2, count: records)
+        countryIDValues = try fixed(.countryID, stride: 4, count: records)
+        admin1Values = try fixed(.admin1ID, stride: 4, count: records)
+        admin2Values = try fixed(.admin2ID, stride: 4, count: records)
+        admin3Values = try fixed(.admin3ID, stride: 4, count: records)
+        admin4Values = try fixed(.admin4ID, stride: 4, count: records)
+        timezoneValues = try fixed(.timezoneIndex, stride: 2, count: records)
+        populationValues = try fixed(.population, stride: 4, count: records)
+        nameOffsets = try fixed(.nameOffset, stride: 4, count: records)
+        alternateStarts = try fixed(.alternateStart, stride: 4, count: records)
+        alternateCounts = try fixed(.alternateCount, stride: 2, count: records)
+        postcodeStarts = try fixed(.postcodeStart, stride: 4, count: records)
+        postcodeCounts = try fixed(.postcodeCount, stride: 2, count: records)
+
+        canonicalStrings = try raw(.canonicalStrings)
+        alternateRecords = try raw(.alternateRecords)
+        alternateStrings = try raw(.alternateStrings)
+        postcodeOffsets = try fixed(.postcodeOffsets, stride: 4)
+        postcodeStrings = try raw(.postcodeStrings)
+
+        features = try Self.decodeStringTable(
+            bytes: raw(.featureStrings),
+            count: header.sections[.featureStrings]!.count,
+            kind: .featureStrings
+        )
+        timezones = try Self.decodeStringTable(
+            bytes: raw(.timezoneStrings),
+            count: header.sections[.timezoneStrings]!.count,
+            kind: .timezoneStrings
+        )
+        languages = try Self.decodeStringTable(
+            bytes: raw(.languageStrings),
+            count: header.sections[.languageStrings]!.count,
+            kind: .languageStrings
+        )
+        languageIDs = Dictionary(
+            uniqueKeysWithValues: languages.enumerated().map {
+                ($0.element, UInt16($0.offset))
+            }
+        )
+
+        let searchRoots = try fixed(
+            .searchRoots,
+            stride: UInt32(PackedRadixIndexLayout.rootStride)
+        )
+        let searchNodes = try fixed(
+            .searchNodes,
+            stride: UInt32(PackedRadixIndexLayout.nodeStride)
+        )
+        let searchEdges = try fixed(
+            .searchEdges,
+            stride: UInt32(PackedRadixIndexLayout.edgeStride)
+        )
+        let searchLabels = try fixed(.searchEdgeLabels, stride: 1)
+        let searchMetadata = try fixed(
+            .searchNameMetadata,
+            stride: UInt32(PackedRadixIndexLayout.nameMetadataStride)
+        )
+        let searchPostings = try fixed(
+            .searchPostings,
+            stride: UInt32(PackedRadixIndexLayout.postingStride)
+        )
+        let searchGlobalTrees = try fixed(
+            .searchGlobalTrees,
+            stride: UInt32(PackedRadixIndexLayout.treeNodeStride)
+        )
+        let searchCountryBuckets = try fixed(
+            .searchCountryBuckets,
+            stride: UInt32(PackedRadixIndexLayout.areaBucketStride)
+        )
+        let searchCountryEntries = try fixed(
+            .searchCountryEntries,
+            stride: UInt32(PackedRadixIndexLayout.areaEntryStride)
+        )
+        let searchCountryTrees = try fixed(
+            .searchCountryTrees,
+            stride: UInt32(PackedRadixIndexLayout.treeNodeStride)
+        )
+        let searchAdminBuckets = try fixed(
+            .searchAdminBuckets,
+            stride: UInt32(PackedRadixIndexLayout.areaBucketStride)
+        )
+        let searchAdminEntries = try fixed(
+            .searchAdminEntries,
+            stride: UInt32(PackedRadixIndexLayout.areaEntryStride)
+        )
+        let searchAdminTrees = try fixed(
+            .searchAdminTrees,
+            stride: UInt32(PackedRadixIndexLayout.treeNodeStride)
+        )
+        try Self.validateSearchIndex(
+            roots: searchRoots,
+            nodes: searchNodes,
+            edges: searchEdges,
+            labels: searchLabels,
+            metadata: searchMetadata,
+            postings: searchPostings,
+            globalTrees: searchGlobalTrees,
+            countryBuckets: searchCountryBuckets,
+            countryEntries: searchCountryEntries,
+            countryTrees: searchCountryTrees,
+            adminBuckets: searchAdminBuckets,
+            adminEntries: searchAdminEntries,
+            adminTrees: searchAdminTrees
+        )
+        let rawSections: [DatabaseSectionKind: UnsafeRawBufferPointer] = [
+            .searchRoots: searchRoots.bytes,
+            .searchNodes: searchNodes.bytes,
+            .searchEdges: searchEdges.bytes,
+            .searchEdgeLabels: searchLabels.bytes,
+            .searchNameMetadata: searchMetadata.bytes,
+            .searchPostings: searchPostings.bytes,
+            .searchGlobalTrees: searchGlobalTrees.bytes,
+            .searchCountryBuckets: searchCountryBuckets.bytes,
+            .searchCountryEntries: searchCountryEntries.bytes,
+            .searchCountryTrees: searchCountryTrees.bytes,
+            .searchAdminBuckets: searchAdminBuckets.bytes,
+            .searchAdminEntries: searchAdminEntries.bytes,
+            .searchAdminTrees: searchAdminTrees.bytes,
+        ]
+        self.rawSections = rawSections
+
+        for row in 0..<Int(header.recordCount) {
+            guard Int(featureValues.uint8(at: row)) < features.count else {
+                throw DatabaseFormatError.invalidSection(
+                    .feature,
+                    "row \(row) has an invalid feature index"
+                )
+            }
+            guard Int(timezoneValues.uint16(at: row)) < timezones.count else {
+                throw DatabaseFormatError.invalidSection(
+                    .timezoneIndex,
+                    "row \(row) has an invalid timezone index"
+                )
+            }
+        }
     }
 
-    /// Search for a string in the indexed location names and one language index
-    public func proximity(
-        latitude: Float,
-        longitude: Float,
-        maxCount: Int,
-        maxDistanceKilometer: Float
-    ) -> [(Int32, Float)] {
-        let results = geotree.knn(
-            latitude: latitude,
-            longitude: longitude,
-            count: maxCount,
-            maxDistanceKilometer: maxDistanceKilometer,
-            elements: geonames.geonames
-        )
-        return results.filter({ $0.id > 0 })
+    static func loadOrCreate(
+        logger: Logger,
+        options: DatabaseBuildOptions = .init()
+    ) throws -> GeocodingDatabase {
+        if !FileManager.default.fileExists(atPath: databaseFile.path) {
+            guard
+                FileManager.default.fileExists(
+                    atPath: GeocodingDatabaseBuilder.geonamesFile.path
+                ),
+                FileManager.default.fileExists(
+                    atPath: GeocodingDatabaseBuilder.alternateNamesFile.path
+                )
+            else {
+                throw Abort(
+                    .internalServerError,
+                    reason:
+                        "database-v2.bin is missing. Download allCountries.txt and "
+                        + "alternateNamesV2.txt, then run `geocoding-api build-database`."
+                )
+            }
+            try GeocodingDatabaseBuilder(logger: logger, options: options).build()
+        }
+        do {
+            return try GeocodingDatabase()
+        } catch {
+            logger.error("Could not load database-v2.bin: \(error)")
+            guard
+                FileManager.default.fileExists(
+                    atPath: GeocodingDatabaseBuilder.geonamesFile.path
+                ),
+                FileManager.default.fileExists(
+                    atPath: GeocodingDatabaseBuilder.alternateNamesFile.path
+                )
+            else {
+                throw error
+            }
+            try GeocodingDatabaseBuilder(
+                logger: logger,
+                options: DatabaseBuildOptions(
+                    memoryLimitBytes: options.memoryLimitBytes,
+                    workers: options.workers,
+                    force: true
+                )
+            ).build()
+            return try GeocodingDatabase()
+        }
     }
 
-    public init(geonames: Geonames, logger: Logger) {
-        logger.info("GeoTree: Start loading")
-        let startTree = Date()
-        self.geotree = GeoTree(elements: geonames.geonames, depth: nil)
-        logger.info("GeoTree: Finished loading in \(Date().timeIntervalSince(startTree)) seconds")
+    var recordCount: Int {
+        return Int(header.recordCount)
+    }
 
-        let start = Date()
-        logger.info("SearchTree: Start loading")
+    func rawSection(_ kind: DatabaseSectionKind) -> UnsafeRawBufferPointer {
+        return rawSections[kind]!
+    }
 
-        self.geonames = geonames
-        var languageIndex = [SearchTreeLoader]()
-        languageIndex.reserveCapacity(geonames.languages.count)
-        for _ in geonames.languages {
-            languageIndex.append(SearchTreeLoader())
+    func sectionDescriptor(_ kind: DatabaseSectionKind) -> DatabaseSectionDescriptor {
+        return header.sections[kind]!
+    }
+
+    func row(for id: Int32) -> Int? {
+        guard id >= 0, UInt32(id) <= header.maximumGeonameID else {
+            return nil
         }
-        let languageEmpty = geonames.languages.firstIndex(where: { $0 == "" })!
-        let languageIata = geonames.languages.firstIndex(where: { $0 == "icao" })!
-        let languageIcao = geonames.languages.firstIndex(where: { $0 == "iata" })!
+        let row = idToRow.uint32(at: Int(id))
+        guard row != UInt32.max, row < header.recordCount else {
+            return nil
+        }
+        return Int(row)
+    }
 
-        logger.info("SearchTree: Prepare language trees")
-        for (id, geoname) in geonames.geonames {
-            if !geonames.includeInSearchIndex(featureCode: geoname.featureCode) {
-                continue
+    func id(row: Int) -> Int32 {
+        return Int32(bitPattern: rowToID.uint32(at: row))
+    }
+
+    func latitude(row: Int) -> Float {
+        return latitudeValues.float32(at: row)
+    }
+
+    func longitude(row: Int) -> Float {
+        return longitudeValues.float32(at: row)
+    }
+
+    func ranking(row: Int) -> Float {
+        return rankingValues.float32(at: row)
+    }
+
+    func featureIndex(row: Int) -> UInt8 {
+        return featureValues.uint8(at: row)
+    }
+
+    func feature(row: Int) -> String {
+        return features[Int(featureIndex(row: row))]
+    }
+
+    func countryISO2Value(row: Int) -> UInt16 {
+        return countryValues.uint16(at: row)
+    }
+
+    func countryISO2(row: Int) -> String {
+        return Self.countryString(countryISO2Value(row: row))
+    }
+
+    func countryID(row: Int) -> Int32 {
+        return countryIDValues.int32(at: row)
+    }
+
+    func admin1ID(row: Int) -> Int32 {
+        return admin1Values.int32(at: row)
+    }
+
+    func admin2ID(row: Int) -> Int32 {
+        return admin2Values.int32(at: row)
+    }
+
+    func admin3ID(row: Int) -> Int32 {
+        return admin3Values.int32(at: row)
+    }
+
+    func admin4ID(row: Int) -> Int32 {
+        return admin4Values.int32(at: row)
+    }
+
+    func population(row: Int) -> UInt32 {
+        return populationValues.uint32(at: row)
+    }
+
+    func name(row: Int, languageID: UInt16) throws -> String {
+        let start = Int(alternateStarts.uint32(at: row))
+        let count = Int(alternateCounts.uint16(at: row))
+        guard start <= alternateRecords.count / 6, count <= alternateRecords.count / 6 - start
+        else {
+            throw DatabaseFormatError.invalidSection(
+                .alternateRecords,
+                "row \(row) alternate range is invalid"
+            )
+        }
+        for index in 0..<count {
+            let record = (start + index) * 6
+            if alternateRecords.readUInt16(at: record) == languageID {
+                return try string(
+                    pool: alternateStrings,
+                    offset: alternateRecords.readUInt32(at: record + 2),
+                    section: .alternateStrings
+                )
             }
-            for name in geoname.alternativeNames {
-                if name.0 == languageEmpty {
-                    continue
+        }
+        return try string(
+            pool: canonicalStrings,
+            offset: nameOffsets.uint32(at: row),
+            section: .canonicalStrings
+        )
+    }
+
+    func canonicalName(row: Int) throws -> String {
+        return try string(
+            pool: canonicalStrings,
+            offset: nameOffsets.uint32(at: row),
+            section: .canonicalStrings
+        )
+    }
+
+    func forEachAlternateName(
+        row: Int,
+        _ body: (UInt16, String) throws -> Void
+    ) throws {
+        let start = Int(alternateStarts.uint32(at: row))
+        let count = Int(alternateCounts.uint16(at: row))
+        guard start <= alternateRecords.count / 6, count <= alternateRecords.count / 6 - start
+        else {
+            throw DatabaseFormatError.invalidSection(
+                .alternateRecords,
+                "row \(row) alternate range is invalid"
+            )
+        }
+        for index in 0..<count {
+            let record = (start + index) * 6
+            try body(
+                alternateRecords.readUInt16(at: record),
+                string(
+                    pool: alternateStrings,
+                    offset: alternateRecords.readUInt32(at: record + 2),
+                    section: .alternateStrings
+                )
+            )
+        }
+    }
+
+    func response(
+        id: Int32,
+        languageID: UInt16
+    ) throws -> GeocodingApi.Geoname? {
+        guard let row = row(for: id) else {
+            return nil
+        }
+        var output = GeocodingApi.Geoname()
+        output.id = id
+        output.name = try name(row: row, languageID: languageID)
+        output.latitude = latitude(row: row)
+        output.longitude = longitude(row: row)
+        output.elevation = Float(elevationValues.int16(at: row))
+        output.countryCode = countryISO2(row: row)
+        output.countryID = countryID(row: row)
+        output.country = try referencedName(
+            id: output.countryID,
+            languageID: languageID
+        )
+        output.featureCode = feature(row: row)
+        output.admin1ID = admin1ID(row: row)
+        output.admin2ID = admin2ID(row: row)
+        output.admin3ID = admin3ID(row: row)
+        output.admin4ID = admin4ID(row: row)
+        output.admin1 = try referencedName(id: output.admin1ID, languageID: languageID)
+        output.admin2 = try referencedName(id: output.admin2ID, languageID: languageID)
+        output.admin3 = try referencedName(id: output.admin3ID, languageID: languageID)
+        output.admin4 = try referencedName(id: output.admin4ID, languageID: languageID)
+        output.population = population(row: row)
+        output.timezone = timezones[Int(timezoneValues.uint16(at: row))]
+
+        let postcodeStart = Int(postcodeStarts.uint32(at: row))
+        let postcodeCount = Int(postcodeCounts.uint16(at: row))
+        guard
+            postcodeStart <= postcodeOffsets.count,
+            postcodeCount <= postcodeOffsets.count - postcodeStart
+        else {
+            throw DatabaseFormatError.invalidSection(
+                .postcodeOffsets,
+                "row \(row) postcode range is invalid"
+            )
+        }
+        output.postcodes.reserveCapacity(postcodeCount)
+        for index in 0..<postcodeCount {
+            output.postcodes.append(
+                try string(
+                    pool: postcodeStrings,
+                    offset: postcodeOffsets.uint32(at: postcodeStart + index),
+                    section: .postcodeStrings
+                )
+            )
+        }
+        return output
+    }
+
+    private func referencedName(
+        id: Int32,
+        languageID: UInt16
+    ) throws -> String {
+        guard let row = row(for: id) else {
+            return ""
+        }
+        return try name(row: row, languageID: languageID)
+    }
+
+    private func string(
+        pool: UnsafeRawBufferPointer,
+        offset: UInt32,
+        section: DatabaseSectionKind
+    ) throws -> String {
+        let position = Int(offset)
+        guard position + 4 <= pool.count else {
+            throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
+        }
+        let length = Int(pool.readUInt32(at: position))
+        guard length <= pool.count - position - 4 else {
+            throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
+        }
+        guard
+            let value = String(
+                bytes: pool[position + 4..<position + 4 + length],
+                encoding: .utf8
+            )
+        else {
+            throw DatabaseFormatError.invalidSection(section, "string is not valid UTF-8")
+        }
+        return value
+    }
+
+    private static func decodeStringTable(
+        bytes: UnsafeRawBufferPointer,
+        count: UInt64,
+        kind: DatabaseSectionKind
+    ) throws -> [String] {
+        guard let expectedCount = Int(exactly: count) else {
+            throw DatabaseFormatError.invalidSection(kind, "table is too large")
+        }
+        var result = [String]()
+        result.reserveCapacity(expectedCount)
+        var offset = 0
+        while result.count < expectedCount {
+            guard offset + 4 <= bytes.count else {
+                throw DatabaseFormatError.invalidSection(kind, "truncated string table")
+            }
+            let length = Int(bytes.readUInt32(at: offset))
+            offset += 4
+            guard length <= bytes.count - offset else {
+                throw DatabaseFormatError.invalidSection(kind, "string exceeds table")
+            }
+            guard
+                let value = String(
+                    bytes: bytes[offset..<offset + length],
+                    encoding: .utf8
+                )
+            else {
+                throw DatabaseFormatError.invalidSection(kind, "invalid UTF-8")
+            }
+            result.append(value)
+            offset += length
+        }
+        guard offset == bytes.count else {
+            throw DatabaseFormatError.invalidSection(kind, "trailing string table data")
+        }
+        return result
+    }
+
+    private static func validateSearchIndex(
+        roots: MappedDatabaseSection,
+        nodes: MappedDatabaseSection,
+        edges: MappedDatabaseSection,
+        labels: MappedDatabaseSection,
+        metadata: MappedDatabaseSection,
+        postings: MappedDatabaseSection,
+        globalTrees: MappedDatabaseSection,
+        countryBuckets: MappedDatabaseSection,
+        countryEntries: MappedDatabaseSection,
+        countryTrees: MappedDatabaseSection,
+        adminBuckets: MappedDatabaseSection,
+        adminEntries: MappedDatabaseSection,
+        adminTrees: MappedDatabaseSection
+    ) throws {
+        var namesByIndex = [UInt16: UInt32]()
+        var previousIndex: UInt16?
+        for rootIndex in 0..<roots.count {
+            let offset = rootIndex * roots.stride
+            let indexID = roots.bytes.readUInt16(at: offset)
+            let rootNode = Int(roots.bytes.readUInt32(at: offset + 4))
+            let nameBase = Int(roots.bytes.readUInt32(at: offset + 8))
+            let nameCount = Int(roots.bytes.readUInt32(at: offset + 12))
+            let treeStart = Int(roots.bytes.readUInt32(at: offset + 16))
+            let leafBase = Int(roots.bytes.readUInt32(at: offset + 20))
+            guard
+                previousIndex == nil || previousIndex! < indexID,
+                rootNode < nodes.count,
+                nameBase <= metadata.count,
+                nameCount <= metadata.count - nameBase
+            else {
+                throw DatabaseFormatError.invalidSection(
+                    .searchRoots,
+                    "root \(rootIndex) has invalid ordering or ranges"
+                )
+            }
+            let blockCount =
+                (nameCount + PackedRadixIndexLayout.namesPerLeaf - 1)
+                / PackedRadixIndexLayout.namesPerLeaf
+            guard
+                leafBase > 0,
+                leafBase & (leafBase - 1) == 0,
+                leafBase >= blockCount,
+                treeStart <= globalTrees.count,
+                leafBase <= (globalTrees.count - treeStart) / 2
+            else {
+                throw DatabaseFormatError.invalidSection(
+                    .searchRoots,
+                    "root \(rootIndex) has an invalid segment tree"
+                )
+            }
+            namesByIndex[indexID] = UInt32(nameCount)
+            previousIndex = indexID
+        }
+
+        for nodeIndex in 0..<nodes.count {
+            let offset = nodeIndex * nodes.stride
+            let firstEdge = Int(nodes.bytes.readUInt32(at: offset))
+            let edgeCount = Int(nodes.bytes.readUInt16(at: offset + 4))
+            guard
+                firstEdge <= edges.count,
+                edgeCount <= edges.count - firstEdge,
+                nodes.bytes.readUInt32(at: offset + 12) > 0
+            else {
+                throw DatabaseFormatError.invalidSection(
+                    .searchNodes,
+                    "node \(nodeIndex) has invalid edge or subtree ranges"
+                )
+            }
+        }
+
+        for edgeIndex in 0..<edges.count {
+            let offset = edgeIndex * edges.stride
+            let encodedChild = edges.bytes.readUInt32(at: offset)
+            let isLeaf = encodedChild & 0x8000_0000 != 0
+            let child = Int(encodedChild & 0x7fff_ffff)
+            let labelOffset = Int(edges.bytes.readUInt32(at: offset + 4))
+            let labelLength = Int(edges.bytes.readUInt16(at: offset + 8))
+            guard
+                isLeaf || child < nodes.count,
+                labelLength > 0,
+                labelOffset <= labels.count,
+                labelLength <= labels.count - labelOffset,
+                labels.bytes[labelOffset] == edges.bytes[offset + 10]
+            else {
+                throw DatabaseFormatError.invalidSection(
+                    .searchEdges,
+                    "edge \(edgeIndex) has invalid child or label ranges"
+                )
+            }
+        }
+
+        for nameIndex in 0..<metadata.count {
+            let offset = nameIndex * metadata.stride
+            let start = Int(metadata.bytes.readUInt32(at: offset))
+            let count = Int(metadata.bytes.readUInt32(at: offset + 4))
+            guard start <= postings.count, count <= postings.count - start else {
+                throw DatabaseFormatError.invalidSection(
+                    .searchNameMetadata,
+                    "name \(nameIndex) has an invalid posting range"
+                )
+            }
+        }
+
+        try validateAreaBuckets(
+            buckets: countryBuckets,
+            entries: countryEntries,
+            trees: countryTrees,
+            namesByIndex: namesByIndex,
+            kind: .searchCountryBuckets
+        )
+        try validateAreaBuckets(
+            buckets: adminBuckets,
+            entries: adminEntries,
+            trees: adminTrees,
+            namesByIndex: namesByIndex,
+            kind: .searchAdminBuckets
+        )
+    }
+
+    private static func validateAreaBuckets(
+        buckets: MappedDatabaseSection,
+        entries: MappedDatabaseSection,
+        trees: MappedDatabaseSection,
+        namesByIndex: [UInt16: UInt32],
+        kind: DatabaseSectionKind
+    ) throws {
+        var previousKey: (UInt16, UInt32)?
+        for bucketIndex in 0..<buckets.count {
+            let offset = bucketIndex * buckets.stride
+            let indexID = buckets.bytes.readUInt16(at: offset)
+            let area = buckets.bytes.readUInt32(at: offset + 4)
+            let entryStart = Int(buckets.bytes.readUInt32(at: offset + 8))
+            let entryCount = Int(buckets.bytes.readUInt32(at: offset + 12))
+            let treeStart = Int(buckets.bytes.readUInt32(at: offset + 16))
+            let leafBase = Int(buckets.bytes.readUInt32(at: offset + 20))
+            let key = (indexID, area)
+            guard
+                previousKey == nil
+                    || previousKey!.0 < key.0
+                    || (previousKey!.0 == key.0 && previousKey!.1 < key.1),
+                let nameCount = namesByIndex[indexID],
+                entryStart <= entries.count,
+                entryCount <= entries.count - entryStart,
+                leafBase > 0,
+                leafBase & (leafBase - 1) == 0,
+                leafBase
+                    >= (entryCount + PackedRadixIndexLayout.namesPerLeaf - 1)
+                        / PackedRadixIndexLayout.namesPerLeaf,
+                treeStart <= trees.count,
+                leafBase <= (trees.count - treeStart) / 2
+            else {
+                throw DatabaseFormatError.invalidSection(
+                    kind,
+                    "area bucket \(bucketIndex) has invalid ranges"
+                )
+            }
+            var previousOrdinal: UInt32?
+            for entry in entryStart..<entryStart + entryCount {
+                let ordinal = entries.bytes.readUInt32(at: entry * entries.stride)
+                guard
+                    ordinal < nameCount,
+                    previousOrdinal == nil || previousOrdinal! < ordinal
+                else {
+                    throw DatabaseFormatError.invalidSection(
+                        kind,
+                        "area bucket \(bucketIndex) has invalid name ordinals"
+                    )
                 }
-                languageIndex[Int(name.0)].add(name.1, id: id)
+                previousOrdinal = ordinal
             }
+            previousKey = key
         }
-        self.languageIndex = languageIndex.map({ $0.immutable() })
+    }
 
-        logger.info("SearchTree: Load main index")
-        let index = SearchTreeLoader()
-        for (id, geoname) in geonames.geonames {
-            if !geonames.includeInSearchIndex(featureCode: geoname.featureCode) {
-                continue
-            }
-            index.add(geoname.name, id: id)
-            for name in geoname.alternativeNames {
-                if name.0 == languageEmpty || name.0 == languageIata || name.0 == languageIcao {
-                    index.add(name.1, id: id)
-                }
-            }
-            for name in geoname.postcodes {
-                index.add(name, id: id)
-            }
+    static func countryValue(_ string: String) -> UInt16? {
+        let normalized =
+            string
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        let bytes = Array(normalized.utf8)
+        guard bytes.count == 2, bytes[0] < 128, bytes[1] < 128 else {
+            return nil
         }
-        self.index = index.immutable()
+        return UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
+    }
 
-        logger.info("SearchTree: Finished loading in \(Date().timeIntervalSince(start)) seconds")
+    static func countryString(_ value: UInt16) -> String {
+        guard value != 0 else {
+            return ""
+        }
+        return String(
+            bytes: [
+                UInt8(truncatingIfNeeded: value),
+                UInt8(truncatingIfNeeded: value >> 8),
+            ],
+            encoding: .ascii
+        ) ?? ""
     }
 }
