@@ -14,20 +14,23 @@ import Vapor
  /v1/geoip
  */
 
-struct GeocodingapiController: RouteCollection {
+struct GeocodingapiController: RouteCollection, Sendable {
     let database: GeocodingDatabase
     let administrativeAreaResolver: AdministrativeAreaResolver
 
-    public init(_ app: Application) throws {
-        try self.init(database: GeocodingDatabase.loadOrCreate(logger: app.logger))
+    public init(_ app: Application) async throws {
+        self.init(
+            database: try await GeocodingDatabase.loadOrCreate(
+                logger: app.logger
+            )
+        )
     }
 
-    init(database: GeocodingDatabase) throws {
+    init(database: GeocodingDatabase) {
         self.database = database
-        self.administrativeAreaResolver = try AdministrativeAreaResolver(
+        self.administrativeAreaResolver = AdministrativeAreaResolver(
             database: database
         )
-        _ = database.searchIndex
     }
 
     static func parseSearchName(_ value: String) -> (name: String, areaName: String?) {
@@ -59,7 +62,7 @@ struct GeocodingapiController: RouteCollection {
         categoriesRoute.get("get", use: self.get)
     }
 
-    func search(_ request: Request) throws -> EventLoopFuture<Response> {
+    func search(_ request: Request) async throws -> Response {
         struct SearchQuery: Content {
             let name: String
             let language: String?
@@ -100,20 +103,24 @@ struct GeocodingapiController: RouteCollection {
                 countryCode: params.countryCode,
                 administrativeArea: administrativeAreaResolution
             )
-        let mapped: [GeocodingApi.Geoname] = try results.map({
-            guard let geoname = try database.response(id: $0.0, languageID: languageId)
-            else {
-                fatalError("Geoname in search index was not in database.")
-            }
-            return geoname
-        })
         var out = GeocodingApi.SearchResults()
-        out.results = mapped
+        out.results.reserveCapacity(results.count)
+        for result in results {
+            guard
+                let geoname = try database.response(
+                    id: result.0,
+                    languageID: languageId
+                )
+            else {
+                throw GeocodingApiError.databaseInvariant
+            }
+            out.results.append(geoname)
+        }
         out.generationtimeMs = Float(Date().timeIntervalSince(start) * 1000)
-        return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
+        return try out.encode(format: params.format)
     }
 
-    func get(_ request: Request) throws -> EventLoopFuture<Response> {
+    func get(_ request: Request) async throws -> Response {
         struct GetQuery: Content {
             let id: Int32
             let language: String?
@@ -127,22 +134,32 @@ struct GeocodingapiController: RouteCollection {
         else {
             throw GeocodingApiError.locationNotFound(id: params.id)
         }
-        return request.eventLoop.makeSucceededFuture(try out.encode(format: params.format))
+        return try out.encode(format: params.format)
     }
 }
 
 enum GeocodingApiError: Error {
     case locationNotFound(id: Int32)
     case invalidCount
+    case databaseInvariant
 }
 
 extension GeocodingApiError: AbortError {
     var status: HTTPResponseStatus {
-        return .badRequest
+        switch self {
+        case .databaseInvariant:
+            return .internalServerError
+        case .locationNotFound(id: _):
+            return .badRequest
+        case .invalidCount:
+            return .badRequest
+        }
     }
 
     var reason: String {
         switch self {
+        case .databaseInvariant:
+            return "The search index references an unavailable database row."
         case .locationNotFound(id: _):
             return "Location ID not found."
         case .invalidCount:

@@ -44,7 +44,7 @@ struct XXHash64 {
     private var accumulator4 = UInt64.max &- Self.prime1 &+ 1
     private var pending = [UInt8]()
 
-    mutating func update(_ bytes: UnsafeRawBufferPointer) {
+    mutating func update(_ bytes: borrowing Span<UInt8>) {
         guard !bytes.isEmpty else {
             return
         }
@@ -54,21 +54,31 @@ struct XXHash64 {
         if !pending.isEmpty {
             let required = 32 - pending.count
             let copied = min(required, bytes.count)
-            pending.append(contentsOf: bytes[0..<copied])
+            bytes.extracting(0..<copied).withUnsafeBufferPointer {
+                pending.append(contentsOf: $0)
+            }
             offset += copied
             if pending.count == 32 {
-                pending.withUnsafeBytes { consumeStripe($0) }
+                pending.withUnsafeBufferPointer {
+                    consumeStripe(Span(_unsafeElements: $0))
+                }
                 pending.removeAll(keepingCapacity: true)
             }
         }
 
         while offset + 32 <= bytes.count {
-            consumeStripe(UnsafeRawBufferPointer(rebasing: bytes[offset..<offset + 32]))
+            consumeStripe(bytes.extracting(offset..<offset + 32))
             offset += 32
         }
         if offset < bytes.count {
-            pending.append(contentsOf: bytes[offset..<bytes.count])
+            bytes.extracting(offset..<bytes.count).withUnsafeBufferPointer {
+                pending.append(contentsOf: $0)
+            }
         }
+    }
+
+    mutating func update(_ bytes: UnsafeRawBufferPointer) {
+        update(Span<UInt8>(_unsafeBytes: bytes))
     }
 
     mutating func update(_ data: Data) {
@@ -121,7 +131,7 @@ struct XXHash64 {
         return hash
     }
 
-    private mutating func consumeStripe(_ bytes: UnsafeRawBufferPointer) {
+    private mutating func consumeStripe(_ bytes: borrowing Span<UInt8>) {
         accumulator1 = Self.round(accumulator1, bytes.readUInt64(at: 0))
         accumulator2 = Self.round(accumulator2, bytes.readUInt64(at: 8))
         accumulator3 = Self.round(accumulator3, bytes.readUInt64(at: 16))
@@ -168,10 +178,10 @@ final class BufferedLineReader {
         _ = close(descriptor)
     }
 
-    /// The callback must not retain the line pointer after it returns.
+    /// The borrowed line cannot escape the callback.
     func forEachLine(
         hasher: inout XXHash64,
-        _ body: (UnsafeRawBufferPointer) throws -> Void
+        _ body: (borrowing Span<UInt8>) throws -> Void
     ) throws {
         var used = 0
         var reachedEnd = false
@@ -205,34 +215,26 @@ final class BufferedLineReader {
             reachedEnd = bytesRead == 0
 
             if bytesRead > 0 {
-                buffer.withUnsafeBytes { rawBuffer in
+                buffer.withUnsafeBufferPointer { buffer in
+                    let bytes = Span(_unsafeElements: buffer)
                     hasher.update(
-                        UnsafeRawBufferPointer(
-                            rebasing: rawBuffer[used..<used + bytesRead]
-                        )
+                        bytes.extracting(used..<used + bytesRead)
                     )
                 }
                 used += bytesRead
             }
 
             var consumed = 0
-            try buffer.withUnsafeBytes { rawBuffer in
+            try buffer.withUnsafeBufferPointer { buffer in
+                let bytes = Span(_unsafeElements: buffer)
                 var lineStart = 0
-                for index in 0..<used where rawBuffer[index] == 10 {
-                    try body(
-                        UnsafeRawBufferPointer(
-                            rebasing: rawBuffer[lineStart..<index]
-                        )
-                    )
+                for index in 0..<used where bytes[index] == 10 {
+                    try body(bytes.extracting(lineStart..<index))
                     lineStart = index + 1
                 }
                 consumed = lineStart
                 if reachedEnd, lineStart < used {
-                    try body(
-                        UnsafeRawBufferPointer(
-                            rebasing: rawBuffer[lineStart..<used]
-                        )
-                    )
+                    try body(bytes.extracting(lineStart..<used))
                     consumed = used
                 }
             }
@@ -316,6 +318,12 @@ final class BufferedBinaryWriter {
     func write(_ bytes: UnsafeRawBufferPointer) throws {
         buffer.append(contentsOf: bytes)
         try flushIfNeeded()
+    }
+
+    func write(_ bytes: borrowing Span<UInt8>) throws {
+        try bytes.withUnsafeBufferPointer {
+            try write(UnsafeRawBufferPointer($0))
+        }
     }
 
     func write(_ data: Data) throws {

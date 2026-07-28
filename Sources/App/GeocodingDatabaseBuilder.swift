@@ -75,6 +75,17 @@ private struct SearchCandidatePartitions {
     }
 }
 
+private struct AdministrativeAliasBuildKey: Hashable {
+    let kind: AdministrativeAliasKind
+    let languageID: UInt16
+    let name: String
+}
+
+private struct AdministrativeAliasBuildCandidate: Hashable {
+    let admin1ID: UInt32
+    let country: UInt16
+}
+
 final class GeocodingDatabaseBuilder {
     static let geonamesFile = DatabaseBuildPaths.default.geonamesFile
     static let alternateNamesFile = DatabaseBuildPaths.default.alternateNamesFile
@@ -109,7 +120,7 @@ final class GeocodingDatabaseBuilder {
         try? fileManager.removeItem(at: workspace)
     }
 
-    func build() throws {
+    func build() async throws {
         let started = Date()
         logger.info("Geocoding database: scan GeoNames metadata")
         let initial = try scanGeonames()
@@ -120,14 +131,17 @@ final class GeocodingDatabaseBuilder {
         logger.info("Geocoding database: partition and reduce alternate names")
         let alternate = try buildAlternateNames(initial: initial)
 
-        logger.info("Geocoding database: write record columns and search candidates")
+        logger.info(
+            "Geocoding database: write record columns, search candidates, and administrative aliases"
+        )
         let records = try buildRecords(initial: initial, alternate: alternate)
 
         logger.info("Geocoding database: build packed search index")
-        let searchArtifacts = try PackedRadixIndexBuilder(
+        let searchArtifacts = try await PackedRadixIndexBuilder(
             logger: logger,
             workspace: workspace,
-            sourcePartitions: records.searchPartitions
+            sourcePartitions: records.searchPartitions,
+            memoryLimitBytes: options.memoryLimitBytes
         ).build()
 
         var artifacts = alternate.artifacts
@@ -152,14 +166,19 @@ final class GeocodingDatabaseBuilder {
             )
         )
 
-        logger.info("Geocoding database: assemble \(artifacts.count) sections")
-        try assemble(
+        let output = workspace.appendingPathComponent("database-v2.bin.tmp")
+        try writeContainer(
+            output: output,
             artifacts: artifacts,
             recordCount: initial.recordCount,
             maximumID: initial.maximumID,
             geonamesFingerprint: initial.fingerprint,
             alternateNamesFingerprint: alternate.fingerprint
         )
+        _ = try GeocodingDatabase(url: output)
+
+        logger.info("Geocoding database: assemble \(artifacts.count) sections")
+        try publish(output: output)
         logger.info(
             "Geocoding database: finished in \(Date().timeIntervalSince(started)) seconds"
         )
@@ -176,8 +195,13 @@ final class GeocodingDatabaseBuilder {
             guard !line.isEmpty else {
                 return
             }
-            var fields = TSVLineScanner(line)
-            let idBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
+            let fields = TSVLineScanner(line)
+            var fieldCursor = TSVFieldCursor()
+            let idBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
             guard
                 let unsignedID = idBytes.unsignedInteger,
                 unsignedID <= UInt32(Int32.max)
@@ -187,14 +211,19 @@ final class GeocodingDatabaseBuilder {
                     line: lineNumber
                 )
             }
-            try fields.skip(6, file: reader.path, lineNumber: lineNumber)
-            let feature = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let countryBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            _ = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin1 = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin2 = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin3 = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin4 = try fields.next(file: reader.path, lineNumber: lineNumber)
+            try fields.skip(
+                &fieldCursor,
+                6,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            let feature = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let countryBytes = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            _ = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin1 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin2 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin3 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin4 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
 
             guard GeoNamesRecordRules.includes(feature) else {
                 return
@@ -205,33 +234,44 @@ final class GeocodingDatabaseBuilder {
 
             let country = countryBytes.iso2
             let id = Int32(unsignedID)
-            let codes = [admin1, admin2, admin3, admin4]
             if feature.equalsASCII("ADM1") {
                 result.administrativeCodes.insert(
                     level: 0,
                     country: country,
-                    codes: codes,
+                    code1: admin1,
+                    code2: admin2,
+                    code3: admin3,
+                    code4: admin4,
                     geonameID: id
                 )
             } else if feature.equalsASCII("ADM2") {
                 result.administrativeCodes.insert(
                     level: 1,
                     country: country,
-                    codes: codes,
+                    code1: admin1,
+                    code2: admin2,
+                    code3: admin3,
+                    code4: admin4,
                     geonameID: id
                 )
             } else if feature.equalsASCII("ADM3") {
                 result.administrativeCodes.insert(
                     level: 2,
                     country: country,
-                    codes: codes,
+                    code1: admin1,
+                    code2: admin2,
+                    code3: admin3,
+                    code4: admin4,
                     geonameID: id
                 )
             } else if feature.equalsASCII("ADM4") {
                 result.administrativeCodes.insert(
                     level: 3,
                     country: country,
-                    codes: codes,
+                    code1: admin1,
+                    code2: admin2,
+                    code3: admin3,
+                    code4: admin4,
                     geonameID: id
                 )
             }
@@ -265,15 +305,32 @@ final class GeocodingDatabaseBuilder {
             guard !line.isEmpty else {
                 return
             }
-            var fields = TSVLineScanner(line)
-            _ = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let idBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let languageBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let name = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let preferred = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let short = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let colloquial = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let historic = try fields.next(file: reader.path, lineNumber: lineNumber)
+            let fields = TSVLineScanner(line)
+            var fieldCursor = TSVFieldCursor()
+            _ = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let idBytes = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let languageBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            let name = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let preferred = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            let short = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let colloquial = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            let historic = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
 
             guard let id = idBytes.unsignedInteger else {
                 throw GeoNamesImportError.invalidInteger(
@@ -593,6 +650,53 @@ final class GeocodingDatabaseBuilder {
         let emptyLanguage = alternate.languages.firstIndex(of: "")
         let iataLanguage = alternate.languages.firstIndex(of: "iata")
         let icaoLanguage = alternate.languages.firstIndex(of: "icao")
+        let abbreviationLanguage = alternate.languages.firstIndex(of: "abbr")
+        let englishLanguage = alternate.languages.firstIndex(of: "en")
+        var administrativeAliases =
+            [AdministrativeAliasBuildKey: Set<AdministrativeAliasBuildCandidate>]()
+
+        func insertAdministrativeAlias(
+            _ candidate: AdministrativeAliasBuildCandidate,
+            kind: AdministrativeAliasKind,
+            languageID: UInt16 = 0,
+            name: String
+        ) {
+            let normalized = AdministrativeAreaResolver.normalize(name)
+            guard !normalized.isEmpty else {
+                return
+            }
+            administrativeAliases[
+                AdministrativeAliasBuildKey(
+                    kind: kind,
+                    languageID: languageID,
+                    name: normalized
+                ),
+                default: []
+            ].insert(candidate)
+        }
+
+        func insertAdministrativeAlias(
+            _ candidate: AdministrativeAliasBuildCandidate,
+            kind: AdministrativeAliasKind,
+            languageID: UInt16 = 0,
+            bytes: borrowing Span<UInt8>
+        ) throws {
+            let name = bytes.withUnsafeBufferPointer {
+                String(bytes: $0, encoding: .utf8)
+            }
+            guard let name else {
+                throw DatabaseFormatError.invalidSection(
+                    .administrativeAliasStrings,
+                    "administrative alias is not valid UTF-8"
+                )
+            }
+            insertAdministrativeAlias(
+                candidate,
+                kind: kind,
+                languageID: languageID,
+                name: name
+            )
+        }
 
         var ignoredFingerprint = XXHash64()
         let reader = try BufferedLineReader(url: paths.geonamesFile)
@@ -603,25 +707,50 @@ final class GeocodingDatabaseBuilder {
             guard !line.isEmpty else {
                 return
             }
-            var fields = TSVLineScanner(line)
-            let idBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let name = try fields.next(file: reader.path, lineNumber: lineNumber)
-            _ = try fields.next(file: reader.path, lineNumber: lineNumber)
-            _ = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let latitudeBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let longitudeBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            _ = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let feature = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let countryBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            _ = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin1 = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin2 = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin3 = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let admin4 = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let populationBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let elevationBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let demBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
-            let timezoneBytes = try fields.next(file: reader.path, lineNumber: lineNumber)
+            let fields = TSVLineScanner(line)
+            var fieldCursor = TSVFieldCursor()
+            let idBytes = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let name = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            _ = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            _ = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let latitudeBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            let longitudeBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            _ = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let feature = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let countryBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            _ = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin1 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin2 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin3 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let admin4 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let populationBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            let elevationBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
+            let demBytes = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
+            let timezoneBytes = try fields.next(
+                &fieldCursor,
+                file: reader.path,
+                lineNumber: lineNumber
+            )
 
             guard
                 let id = idBytes.unsignedInteger,
@@ -664,26 +793,37 @@ final class GeocodingDatabaseBuilder {
                 field: 18
             )
             let country = countryBytes.iso2
-            let codes = [admin1, admin2, admin3, admin4]
             let admin1ID = initial.administrativeCodes.find(
                 level: 0,
                 country: country,
-                codes: codes
+                code1: admin1,
+                code2: admin2,
+                code3: admin3,
+                code4: admin4
             )
             let admin2ID = initial.administrativeCodes.find(
                 level: 1,
                 country: country,
-                codes: codes
+                code1: admin1,
+                code2: admin2,
+                code3: admin3,
+                code4: admin4
             )
             let admin3ID = initial.administrativeCodes.find(
                 level: 2,
                 country: country,
-                codes: codes
+                code1: admin1,
+                code2: admin2,
+                code3: admin3,
+                code4: admin4
             )
             let admin4ID = initial.administrativeCodes.find(
                 level: 3,
                 country: country,
-                codes: codes
+                code1: admin1,
+                code2: admin2,
+                code3: admin3,
+                code4: admin4
             )
             let alternateStart = alternate.alternateStarts[Int(id)]
             let alternateCount = alternate.alternateCounts[Int(id)]
@@ -721,6 +861,60 @@ final class GeocodingDatabaseBuilder {
             try columnWriters[.postcodeStart]!.write(postcodeStart)
             try columnWriters[.postcodeCount]!.write(postcodeCount)
 
+            let isCountry = GeoNamesRecordRules.isCountry(
+                featureIndex: featureIndex
+            )
+            if (feature.equalsASCII("ADM1") || isCountry), country != 0 {
+                let aliasCandidate = AdministrativeAliasBuildCandidate(
+                    admin1ID: isCountry ? 0 : id,
+                    country: country
+                )
+                try insertAdministrativeAlias(
+                    aliasCandidate,
+                    kind: .common,
+                    bytes: name
+                )
+                for alternateIndex in 0..<Int(alternateCount) {
+                    let record = (Int(alternateStart) + alternateIndex) * 6
+                    let languageID = alternateRecordBytes.readUInt16(at: record)
+                    let offset = alternateRecordBytes.readUInt32(at: record + 2)
+                    let alternateName = try stringBytes(
+                        in: alternateStringBytes,
+                        offset: offset,
+                        section: .alternateStrings
+                    )
+                    if languageID == abbreviationLanguage {
+                        try insertAdministrativeAlias(
+                            aliasCandidate,
+                            kind: isCountry ? .common : .abbreviation,
+                            bytes: Span(_unsafeBytes: alternateName)
+                        )
+                    } else if languageID == emptyLanguage
+                        || languageID == englishLanguage
+                    {
+                        try insertAdministrativeAlias(
+                            aliasCandidate,
+                            kind: .common,
+                            bytes: Span(_unsafeBytes: alternateName)
+                        )
+                    } else {
+                        try insertAdministrativeAlias(
+                            aliasCandidate,
+                            kind: .localized,
+                            languageID: languageID,
+                            bytes: Span(_unsafeBytes: alternateName)
+                        )
+                    }
+                }
+                if isCountry {
+                    insertAdministrativeAlias(
+                        aliasCandidate,
+                        kind: .common,
+                        name: GeocodingDatabase.countryString(country)
+                    )
+                }
+            }
+
             if GeoNamesRecordRules.includeInSearchIndex(featureIndex: featureIndex) {
                 try emitSearchCandidate(
                     bytes: name,
@@ -745,7 +939,7 @@ final class GeocodingDatabaseBuilder {
                             throw GeoNamesImportError.tooManyLanguages
                         }
                         try emitSearchCandidate(
-                            bytes: alternateName,
+                            bytes: Span(_unsafeBytes: alternateName),
                             indexID: languageID + 1,
                             country: country,
                             admin1ID: admin1ID,
@@ -759,7 +953,7 @@ final class GeocodingDatabaseBuilder {
                         || languageID == icaoLanguage
                     {
                         try emitSearchCandidate(
-                            bytes: alternateName,
+                            bytes: Span(_unsafeBytes: alternateName),
                             indexID: 0,
                             country: country,
                             admin1ID: admin1ID,
@@ -778,7 +972,7 @@ final class GeocodingDatabaseBuilder {
                         section: .postcodeStrings
                     )
                     try emitSearchCandidate(
-                        bytes: postcode,
+                        bytes: Span(_unsafeBytes: postcode),
                         indexID: 0,
                         country: country,
                         admin1ID: admin1ID,
@@ -822,6 +1016,9 @@ final class GeocodingDatabaseBuilder {
                 hash: canonicalResult.hash
             )
         )
+        artifacts.append(
+            contentsOf: try writeAdministrativeAliases(administrativeAliases)
+        )
         artifacts.append(try writeDenseIDMap(idToRow))
         for writer in searchWriters {
             _ = try writer.close()
@@ -834,7 +1031,7 @@ final class GeocodingDatabaseBuilder {
     }
 
     private func emitSearchCandidate(
-        bytes: UnsafeRawBufferPointer,
+        bytes: borrowing Span<UInt8>,
         indexID: UInt16,
         country: UInt16,
         admin1ID: Int32,
@@ -842,7 +1039,10 @@ final class GeocodingDatabaseBuilder {
         ranking: Float,
         partitions: SearchCandidatePartitions
     ) throws {
-        guard let value = String(bytes: bytes, encoding: .utf8) else {
+        let value = bytes.withUnsafeBufferPointer {
+            String(bytes: $0, encoding: .utf8)
+        }
+        guard let value else {
             throw DatabaseFormatError.invalidSection(
                 .searchEdgeLabels,
                 "search name is not valid UTF-8"
@@ -928,6 +1128,99 @@ final class GeocodingDatabaseBuilder {
         )
     }
 
+    private func writeAdministrativeAliases(
+        _ aliases: [
+            AdministrativeAliasBuildKey: Set<AdministrativeAliasBuildCandidate>
+        ]
+    ) throws -> [DatabaseSectionArtifact] {
+        func namePrecedes(_ lhs: String, _ rhs: String) -> Bool {
+            let left = Array(lhs.utf8)
+            let right = Array(rhs.utf8)
+            return left.lexicographicallyPrecedes(right)
+        }
+        let keys = aliases.keys.sorted {
+            if $0.kind.rawValue != $1.kind.rawValue {
+                return $0.kind.rawValue < $1.kind.rawValue
+            }
+            if $0.languageID != $1.languageID {
+                return $0.languageID < $1.languageID
+            }
+            return namePrecedes($0.name, $1.name)
+        }
+
+        let recordsURL = workspace.appendingPathComponent(
+            "administrative-alias-records.section"
+        )
+        let stringsURL = workspace.appendingPathComponent(
+            "administrative-alias-strings.section"
+        )
+        let candidatesURL = workspace.appendingPathComponent(
+            "administrative-alias-candidates.section"
+        )
+        let records = try BufferedBinaryWriter(url: recordsURL)
+        let strings = try BufferedBinaryWriter(url: stringsURL)
+        let candidates = try BufferedBinaryWriter(url: candidatesURL)
+        var candidateCount: UInt32 = 0
+
+        for key in keys {
+            let nameOffset = try strings.writeLengthPrefixed(key.name)
+            let values = aliases[key]!.sorted {
+                if $0.admin1ID != $1.admin1ID {
+                    return $0.admin1ID < $1.admin1ID
+                }
+                return $0.country < $1.country
+            }
+            guard let compactCount = UInt16(exactly: values.count) else {
+                throw GeoNamesImportError.tooManyValues(
+                    "administrative-area alias candidates"
+                )
+            }
+            try records.write(key.kind.rawValue)
+            try records.write(UInt8(0))
+            try records.write(key.languageID)
+            try records.write(nameOffset)
+            try records.write(candidateCount)
+            try records.write(compactCount)
+            try records.write(UInt16(0))
+            for value in values {
+                try candidates.write(value.admin1ID)
+                try candidates.write(value.country)
+                try candidates.write(UInt16(0))
+                candidateCount += 1
+            }
+        }
+
+        let recordsResult = try records.close()
+        let stringsResult = try strings.close()
+        let candidatesResult = try candidates.close()
+        return [
+            DatabaseSectionArtifact(
+                kind: .administrativeAliasRecords,
+                url: recordsURL,
+                length: recordsResult.length,
+                count: UInt64(keys.count),
+                stride: UInt32(AdministrativeAliasIndexLayout.recordStride),
+                hash: recordsResult.hash
+            ),
+            DatabaseSectionArtifact(
+                kind: .administrativeAliasStrings,
+                url: stringsURL,
+                length: stringsResult.length,
+                count: stringsResult.length,
+                stride: 1,
+                hash: stringsResult.hash
+            ),
+            DatabaseSectionArtifact(
+                kind: .administrativeAliasCandidates,
+                url: candidatesURL,
+                length: candidatesResult.length,
+                count: UInt64(candidateCount),
+                stride: UInt32(AdministrativeAliasIndexLayout.candidateStride),
+                hash: candidatesResult.hash
+            ),
+        ]
+    }
+
     private func alternatePartitionCount() throws -> Int {
         let attributes = try fileManager.attributesOfItem(
             atPath: paths.alternateNamesFile.path
@@ -941,14 +1234,24 @@ final class GeocodingDatabaseBuilder {
         return partitions
     }
 
-    private func assemble(
+    private func publish(output: URL) throws {
+        let destination = paths.databaseFile.path
+        guard rename(output.path, destination) == 0 else {
+            throw DatabaseBuildIOError.write(
+                path: destination,
+                message: String(cString: strerror(errno))
+            )
+        }
+    }
+
+    private func writeContainer(
+        output: URL,
         artifacts: [DatabaseSectionArtifact],
         recordCount: UInt32,
         maximumID: UInt32,
         geonamesFingerprint: UInt64,
         alternateNamesFingerprint: UInt64
     ) throws {
-        let output = workspace.appendingPathComponent("database-v2.bin.tmp")
         guard fileManager.createFile(atPath: output.path, contents: nil) else {
             throw DatabaseBuildIOError.open(path: output.path, message: "createFile failed")
         }
@@ -1004,13 +1307,5 @@ final class GeocodingDatabaseBuilder {
         try handle.synchronize()
         try handle.close()
         _ = try DatabaseFileHeader(mappedFile: MappedFile(url: output))
-
-        let destination = paths.databaseFile.path
-        guard rename(output.path, destination) == 0 else {
-            throw DatabaseBuildIOError.write(
-                path: destination,
-                message: String(cString: strerror(errno))
-            )
-        }
     }
 }

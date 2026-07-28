@@ -27,6 +27,15 @@ struct BuildDatabaseCommand: AsyncCommand {
             name: "memory-limit-mb",
             default: 1024
         )
+        let (memoryLimitBytes, memoryLimitOverflow) = memoryLimit.multipliedReportingOverflow(
+            by: 1_048_576
+        )
+        guard !memoryLimitOverflow else {
+            throw Abort(
+                .badRequest,
+                reason: "--memory-limit-mb is too large for this platform."
+            )
+        }
         if FileManager.default.fileExists(
             atPath: GeocodingDatabaseBuilder.databaseFile.path
         ), !signature.force {
@@ -36,10 +45,10 @@ struct BuildDatabaseCommand: AsyncCommand {
                     "database-v2.bin already exists; pass --force to replace it atomically."
             )
         }
-        try GeocodingDatabaseBuilder(
+        try await GeocodingDatabaseBuilder(
             logger: context.application.logger,
             options: DatabaseBuildOptions(
-                memoryLimitBytes: memoryLimit * 1_048_576,
+                memoryLimitBytes: memoryLimitBytes,
                 force: signature.force
             )
         ).build()

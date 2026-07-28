@@ -37,8 +37,8 @@ private struct AreaViewBuild {
 }
 
 private func compareLexicographically(
-    _ lhs: UnsafeRawBufferPointer,
-    _ rhs: UnsafeRawBufferPointer
+    _ lhs: borrowing Span<UInt8>,
+    _ rhs: borrowing Span<UInt8>
 ) -> Int {
     let common = min(lhs.count, rhs.count)
     for index in 0..<common {
@@ -70,10 +70,14 @@ private final class CandidateRunCursor {
         try advance()
     }
 
-    func name(_ value: SearchNameCandidate) -> UnsafeRawBufferPointer {
-        return UnsafeRawBufferPointer(
+    func withName<Result>(
+        _ value: SearchNameCandidate,
+        _ body: (borrowing Span<UInt8>) throws -> Result
+    ) rethrows -> Result {
+        let name = UnsafeRawBufferPointer(
             rebasing: bytes[value.nameOffset..<value.nameOffset + value.nameLength]
         )
+        return try body(Span(_unsafeBytes: name))
     }
 
     func advance() throws {
@@ -161,10 +165,11 @@ private struct CandidateMergeHeap {
         if lhs.indexID != rhs.indexID {
             return lhs.indexID < rhs.indexID
         }
-        let order = compareLexicographically(
-            cursors[lhsIndex].name(lhs),
-            cursors[rhsIndex].name(rhs)
-        )
+        let order = cursors[lhsIndex].withName(lhs) { lhsName in
+            cursors[rhsIndex].withName(rhs) { rhsName in
+                compareLexicographically(lhsName, rhsName)
+            }
+        }
         if order != 0 {
             return order < 0
         }
@@ -222,7 +227,7 @@ private final class PackedRadixWriter {
         previousName.removeAll(keepingCapacity: true)
     }
 
-    func add(name: UnsafeRawBufferPointer, ordinal: UInt32) throws {
+    func add(name: borrowing Span<UInt8>, ordinal: UInt32) throws {
         var common = 0
         let limit = min(previousName.count, name.count)
         while common < limit, previousName[common] == name[common] {
@@ -243,7 +248,7 @@ private final class PackedRadixWriter {
             )
         }
         stack[stack.count - 1].terminalOrdinal = ordinal
-        previousName = Array(name)
+        previousName = name.withUnsafeBufferPointer { Array($0) }
     }
 
     func finishIndex() throws -> UInt32 {
@@ -447,7 +452,7 @@ private final class SearchIndexSectionWriter {
 
     func emitGroup(
         indexID: UInt16,
-        name: UnsafeRawBufferPointer,
+        name: borrowing Span<UInt8>,
         characterCount: UInt16,
         candidates: [SearchPostingCandidate]
     ) throws {
@@ -502,7 +507,7 @@ private final class SearchIndexSectionWriter {
         leafSummary.insert(rank: maximumRank, characterCount: characterCount)
         leafItemCount += 1
         if leafItemCount == PackedRadixIndexLayout.namesPerLeaf {
-            leafValues.append(contentsOf: leafSummary.values)
+            leafSummary.append(to: &leafValues)
             leafSummary = LengthBinnedRankBounds()
             leafItemCount = 0
         }
@@ -542,7 +547,7 @@ private final class SearchIndexSectionWriter {
             return
         }
         if leafItemCount > 0 {
-            leafValues.append(contentsOf: leafSummary.values)
+            leafSummary.append(to: &leafValues)
         }
         let treeStart = treeNodeCount
         let leafBase = try writeRankBoundTree(
@@ -587,16 +592,23 @@ final class PackedRadixIndexBuilder {
     private let logger: Logger
     private let workspace: URL
     private let sourcePartitions: [URL]
+    private let memoryLimitBytes: Int
     private let fileManager = FileManager.default
 
-    init(logger: Logger, workspace: URL, sourcePartitions: [URL]) {
+    init(
+        logger: Logger,
+        workspace: URL,
+        sourcePartitions: [URL],
+        memoryLimitBytes: Int
+    ) {
         self.logger = logger
         self.workspace = workspace
         self.sourcePartitions = sourcePartitions
+        self.memoryLimitBytes = memoryLimitBytes
     }
 
-    func build() throws -> [DatabaseSectionArtifact] {
-        let runs = try makeSortedRuns()
+    func build() async throws -> [DatabaseSectionArtifact] {
+        let runs = try await makeSortedRuns()
         defer {
             for url in runs {
                 try? fileManager.removeItem(at: url)
@@ -680,45 +692,111 @@ final class PackedRadixIndexBuilder {
         return artifacts
     }
 
-    private func makeSortedRuns() throws -> [URL] {
-        var runs = [URL]()
+    private func makeSortedRuns() async throws -> [URL] {
+        var jobs = [(partition: Int, url: URL, size: Int)]()
         for (partition, url) in sourcePartitions.enumerated() {
             let attributes = try fileManager.attributesOfItem(atPath: url.path)
-            if (attributes[.size] as? NSNumber)?.uint64Value == 0 {
+            let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
+            if size == 0 {
                 try fileManager.removeItem(at: url)
                 continue
             }
-            logger.info(
-                "Packed radix index: sort candidate run \(partition + 1)/\(sourcePartitions.count)"
+            jobs.append((partition, url, size))
+        }
+        guard !jobs.isEmpty else {
+            return []
+        }
+
+        let largestPartition = jobs.map(\.size).max() ?? 1
+        let estimatedPartitionBytes =
+            largestPartition > Int.max / 3
+            ? Int.max : largestPartition * 3
+        let estimatedBytesPerTask = max(32 << 20, estimatedPartitionBytes)
+        let memoryBound = max(1, memoryLimitBytes / estimatedBytesPerTask)
+        let concurrency = min(
+            jobs.count,
+            max(
+                1,
+                min(ProcessInfo.processInfo.activeProcessorCount, memoryBound)
             )
-            let mapped = try MappedFile(url: url)
-            let bytes = try mapped.bytes(offset: 0, length: UInt64(mapped.count))
-            var candidates = try parseCandidates(bytes: bytes, path: url.path)
-            candidates.sort { compare($0, $1, bytes: bytes) }
-            let runURL = workspace.appendingPathComponent("search-sorted-\(partition).run")
-            let writer = try BufferedBinaryWriter(url: runURL)
-            for candidate in candidates {
-                try writer.write(candidate.indexID)
-                try writer.write(candidate.country)
-                try writer.write(candidate.admin1ID)
-                try writer.write(candidate.row)
-                try writer.write(candidate.ranking)
-                try writer.write(candidate.characterCount)
-                try writer.write(UInt16(0))
-                try writer.write(UInt32(candidate.nameLength))
-                try writer.write(
-                    UnsafeRawBufferPointer(
+        )
+        logger.info(
+            "Packed radix index: sorting \(jobs.count) runs with automatic concurrency \(concurrency)"
+        )
+        let workspace = self.workspace
+
+        return try await withThrowingTaskGroup(
+            of: (Int, URL).self,
+            returning: [URL].self
+        ) { group in
+            var nextJob = 0
+            for _ in 0..<concurrency {
+                let job = jobs[nextJob]
+                group.addTask {
+                    try Self.sortPartition(
+                        partition: job.partition,
+                        source: job.url,
+                        workspace: workspace
+                    )
+                }
+                nextJob += 1
+            }
+
+            var completed = [(Int, URL)]()
+            completed.reserveCapacity(jobs.count)
+            while let result = try await group.next() {
+                completed.append(result)
+                if nextJob < jobs.count {
+                    let job = jobs[nextJob]
+                    group.addTask {
+                        try Self.sortPartition(
+                            partition: job.partition,
+                            source: job.url,
+                            workspace: workspace
+                        )
+                    }
+                    nextJob += 1
+                }
+            }
+            return completed.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+    }
+
+    private static func sortPartition(
+        partition: Int,
+        source: URL,
+        workspace: URL
+    ) throws -> (Int, URL) {
+        let mapped = try MappedFile(url: source)
+        let bytes = try mapped.bytes(offset: 0, length: UInt64(mapped.count))
+        var candidates = try parseCandidates(bytes: bytes, path: source.path)
+        candidates.sort { compare($0, $1, bytes: bytes) }
+        let runURL = workspace.appendingPathComponent(
+            "search-sorted-\(partition).run"
+        )
+        let writer = try BufferedBinaryWriter(url: runURL)
+        for candidate in candidates {
+            try writer.write(candidate.indexID)
+            try writer.write(candidate.country)
+            try writer.write(candidate.admin1ID)
+            try writer.write(candidate.row)
+            try writer.write(candidate.ranking)
+            try writer.write(candidate.characterCount)
+            try writer.write(UInt16(0))
+            try writer.write(UInt32(candidate.nameLength))
+            try writer.write(
+                Span(
+                    _unsafeBytes: UnsafeRawBufferPointer(
                         rebasing: bytes[
                             candidate.nameOffset..<candidate.nameOffset + candidate.nameLength
                         ]
                     )
                 )
-            }
-            _ = try writer.close()
-            runs.append(runURL)
-            try fileManager.removeItem(at: url)
+            )
         }
-        return runs
+        _ = try writer.close()
+        try FileManager.default.removeItem(at: source)
+        return (partition, runURL)
     }
 
     private func merge(
@@ -739,10 +817,10 @@ final class PackedRadixIndexBuilder {
             guard let currentIndex else {
                 return
             }
-            try currentName.withUnsafeBytes {
+            try currentName.withUnsafeBufferPointer {
                 try output.emitGroup(
                     indexID: currentIndex,
-                    name: $0,
+                    name: Span(_unsafeElements: $0),
                     characterCount: currentCharacters,
                     candidates: group
                 )
@@ -752,17 +830,23 @@ final class PackedRadixIndexBuilder {
         while let run = heap.removeMinimum() {
             let cursor = cursors[run]
             let candidate = cursor.candidate!
-            let name = cursor.name(candidate)
-            let sameGroup =
-                currentIndex == candidate.indexID
-                && currentName.count == name.count
-                && currentName.withUnsafeBytes { $0.elementsEqual(name) }
-            if !sameGroup {
-                try finishGroup()
-                currentIndex = candidate.indexID
-                currentName = Array(name)
-                currentCharacters = candidate.characterCount
-                group.removeAll(keepingCapacity: true)
+            try cursor.withName(candidate) { name in
+                let sameGroup =
+                    currentIndex == candidate.indexID
+                    && currentName.count == name.count
+                    && currentName.withUnsafeBufferPointer {
+                        compareLexicographically(
+                            Span(_unsafeElements: $0),
+                            name
+                        ) == 0
+                    }
+                if !sameGroup {
+                    try finishGroup()
+                    currentIndex = candidate.indexID
+                    currentName = name.withUnsafeBufferPointer { Array($0) }
+                    currentCharacters = candidate.characterCount
+                    group.removeAll(keepingCapacity: true)
+                }
             }
             group.append(
                 SearchPostingCandidate(
@@ -859,14 +943,14 @@ final class PackedRadixIndexBuilder {
                     )
                     leafCount += 1
                     if leafCount == PackedRadixIndexLayout.namesPerLeaf {
-                        leafValues.append(contentsOf: leafSummary.values)
+                        leafSummary.append(to: &leafValues)
                         leafSummary = LengthBinnedRankBounds()
                         leafCount = 0
                     }
                     offset += 1
                 }
                 if leafCount > 0 {
-                    leafValues.append(contentsOf: leafSummary.values)
+                    leafSummary.append(to: &leafValues)
                 }
                 let treeStart = treeNodeCount
                 let leafBase = try writeRankBoundTree(
@@ -923,7 +1007,7 @@ final class PackedRadixIndexBuilder {
         ]
     }
 
-    private func parseCandidates(
+    private static func parseCandidates(
         bytes: UnsafeRawBufferPointer,
         path: String
     ) throws -> [SearchNameCandidate] {
@@ -959,7 +1043,7 @@ final class PackedRadixIndexBuilder {
         return result
     }
 
-    private func compare(
+    private static func compare(
         _ lhs: SearchNameCandidate,
         _ rhs: SearchNameCandidate,
         bytes: UnsafeRawBufferPointer
@@ -968,11 +1052,15 @@ final class PackedRadixIndexBuilder {
             return lhs.indexID < rhs.indexID
         }
         let order = compareLexicographically(
-            UnsafeRawBufferPointer(
-                rebasing: bytes[lhs.nameOffset..<lhs.nameOffset + lhs.nameLength]
+            Span(
+                _unsafeBytes: UnsafeRawBufferPointer(
+                    rebasing: bytes[lhs.nameOffset..<lhs.nameOffset + lhs.nameLength]
+                )
             ),
-            UnsafeRawBufferPointer(
-                rebasing: bytes[rhs.nameOffset..<rhs.nameOffset + rhs.nameLength]
+            Span(
+                _unsafeBytes: UnsafeRawBufferPointer(
+                    rebasing: bytes[rhs.nameOffset..<rhs.nameOffset + rhs.nameLength]
+                )
             )
         )
         if order != 0 {

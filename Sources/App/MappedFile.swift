@@ -24,21 +24,22 @@ enum MappedFileError: Error, CustomStringConvertible {
         case .map(let path, let message):
             return "Could not memory-map \(path): \(message)"
         case .range(let offset, let length, let fileSize):
-            return "Mapped range \(offset)..<\(offset + length) exceeds file size \(fileSize)"
+            return
+                "Mapped range at offset \(offset) with length \(length) "
+                + "exceeds file size \(fileSize)"
         }
     }
 }
 
 /// Owns an immutable, private memory mapping for the lifetime of the database.
-final class MappedFile: @unchecked Sendable {
+final class MappedFile {
     let path: String
     let count: Int
-    private let descriptor: Int32
     private let address: UnsafeMutableRawPointer
 
     init(url: URL) throws {
         path = url.path
-        descriptor = open(path, O_RDONLY)
+        let descriptor = open(path, O_RDONLY)
         guard descriptor >= 0 else {
             throw MappedFileError.open(path: path, message: Self.lastError())
         }
@@ -64,11 +65,11 @@ final class MappedFile: @unchecked Sendable {
             throw MappedFileError.map(path: path, message: message)
         }
         address = mapping
+        _ = close(descriptor)
     }
 
     deinit {
         _ = munmap(address, count)
-        _ = close(descriptor)
     }
 
     func bytes(offset: UInt64, length: UInt64) throws -> UnsafeRawBufferPointer {
@@ -84,6 +85,10 @@ final class MappedFile: @unchecked Sendable {
             start: UnsafeRawPointer(address).advanced(by: integerOffset),
             count: integerLength
         )
+    }
+
+    func optimizeForRandomAccess() {
+        _ = madvise(address, count, MADV_RANDOM)
     }
 
     private static func lastError() -> String {

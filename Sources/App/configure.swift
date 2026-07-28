@@ -1,6 +1,6 @@
 import Vapor
 
-public func configure(_ app: Application) throws {
+public func configure(_ app: Application) async throws {
     TimeZone.ReferenceType.default = TimeZone(abbreviation: "GMT")!
 
     app.http.server.configuration.responseCompression = .enabled
@@ -17,9 +17,9 @@ public func configure(_ app: Application) throws {
         return
     }
 
-    try routes(app)
+    try await routes(app)
 }
 
-func routes(_ app: Application) throws {
-    try app.routes.register(collection: try GeocodingapiController(app))
+func routes(_ app: Application) async throws {
+    try app.routes.register(collection: try await GeocodingapiController(app))
 }

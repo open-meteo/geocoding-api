@@ -29,51 +29,66 @@ enum GeoNamesImportError: Error, CustomStringConvertible {
     }
 }
 
-struct TSVLineScanner {
-    let line: UnsafeRawBufferPointer
-    private(set) var offset = 0
-    private(set) var fieldNumber = 0
+struct TSVFieldCursor {
+    fileprivate var offset = 0
+    fileprivate var fieldNumber = 0
+}
 
-    init(_ line: UnsafeRawBufferPointer) {
+struct TSVLineScanner: ~Escapable {
+    private let line: Span<UInt8>
+
+    @_lifetime(copy line)
+    init(_ line: consuming Span<UInt8>) {
         self.line = line
     }
 
-    mutating func next(file: String, lineNumber: Int) throws -> UnsafeRawBufferPointer {
-        fieldNumber += 1
-        guard offset <= line.count else {
+    @_lifetime(borrow self)
+    borrowing func next(
+        _ cursor: inout TSVFieldCursor,
+        file: String,
+        lineNumber: Int
+    ) throws -> Span<UInt8> {
+        cursor.fieldNumber += 1
+        guard cursor.offset <= line.count else {
             throw GeoNamesImportError.missingField(
                 file: file,
                 line: lineNumber,
-                field: fieldNumber
+                field: cursor.fieldNumber
             )
         }
-        let start = offset
-        while offset < line.count, line[offset] != 9 {
-            offset += 1
+        let start = cursor.offset
+        while cursor.offset < line.count, line[cursor.offset] != 9 {
+            cursor.offset += 1
         }
-        let result = UnsafeRawBufferPointer(rebasing: line[start..<offset])
-        if offset < line.count {
-            offset += 1
+        let result = line.extracting(start..<cursor.offset)
+        if cursor.offset < line.count {
+            cursor.offset += 1
         } else {
-            offset = line.count + 1
+            cursor.offset = line.count + 1
         }
         return result
     }
 
-    mutating func skip(_ count: Int, file: String, lineNumber: Int) throws {
+    borrowing func skip(
+        _ cursor: inout TSVFieldCursor,
+        _ count: Int,
+        file: String,
+        lineNumber: Int
+    ) throws {
         for _ in 0..<count {
-            _ = try next(file: file, lineNumber: lineNumber)
+            _ = try next(&cursor, file: file, lineNumber: lineNumber)
         }
     }
 }
 
-extension UnsafeRawBufferPointer {
+extension Span where Element == UInt8 {
     var packedASCII: UInt64? {
         guard count <= 8 else {
             return nil
         }
         var result: UInt64 = 0
-        for (index, byte) in enumerated() {
+        for index in indices {
+            let byte = self[index]
             guard byte < 128 else {
                 return nil
             }
@@ -87,7 +102,10 @@ extension UnsafeRawBufferPointer {
             return false
         }
         return value.withUTF8Buffer { expected in
-            elementsEqual(expected)
+            for index in indices where self[index] != expected[index] {
+                return false
+            }
+            return true
         }
     }
 
@@ -96,7 +114,8 @@ extension UnsafeRawBufferPointer {
             return nil
         }
         var result: UInt32 = 0
-        for byte in self {
+        for index in indices {
+            let byte = self[index]
             guard byte >= 48, byte <= 57 else {
                 return nil
             }
@@ -236,11 +255,14 @@ extension UnsafeRawBufferPointer {
     }
 
     func copiedData() -> Data {
-        return Data(self)
+        return withUnsafeBufferPointer { Data(buffer: $0) }
     }
 
     func utf8String(file: String, line: Int, field: Int) throws -> String {
-        guard let value = String(bytes: self, encoding: .utf8) else {
+        let value = withUnsafeBufferPointer {
+            String(bytes: $0, encoding: .utf8)
+        }
+        guard let value else {
             throw GeoNamesImportError.invalidUTF8(file: file, line: line, field: field)
         }
         return value
@@ -279,11 +301,21 @@ enum GeoNamesRecordRules {
     static let indexedFeatureNamesExcluded = Set([
         "PCL", "ADM1", "ADM2", "ADM3", "ADM4", "ADM5", "LTER", "PRSH", "TERR", "ZN", "ZNB",
     ])
+    private static let countryFeatureIndexes = Set(
+        includedFeatureNames.enumerated().compactMap { index, name in
+            switch name {
+            case "PCLI", "PCLD", "PCLIX", "PCLS", "PCLF", "PCL":
+                return UInt8(index)
+            default:
+                return nil
+            }
+        }
+    )
 
     static let includedFeatureCodes: Set<UInt64> = Set(
         includedFeatureNames.compactMap {
             $0.utf8.withContiguousStorageIfAvailable { bytes in
-                bytes.withUnsafeBytes { $0.packedASCII }
+                Span(_unsafeElements: bytes).packedASCII
             } ?? nil
         }
     )
@@ -292,7 +324,7 @@ enum GeoNamesRecordRules {
         var result = [UInt64: UInt8]()
         for (index, name) in includedFeatureNames.enumerated() {
             let code = name.utf8.withContiguousStorageIfAvailable { bytes in
-                bytes.withUnsafeBytes { $0.packedASCII! }
+                Span(_unsafeElements: bytes).packedASCII!
             }!
             result[code] = UInt8(index)
         }
@@ -303,7 +335,7 @@ enum GeoNamesRecordRules {
         indexedFeatureNamesExcluded.compactMap { name in
             guard
                 let code = name.utf8.withContiguousStorageIfAvailable({
-                    $0.withUnsafeBytes { $0.packedASCII }
+                    Span(_unsafeElements: $0).packedASCII
                 }) ?? nil
             else {
                 return nil
@@ -312,14 +344,14 @@ enum GeoNamesRecordRules {
         }
     )
 
-    static func includes(_ feature: UnsafeRawBufferPointer) -> Bool {
+    static func includes(_ feature: borrowing Span<UInt8>) -> Bool {
         guard let code = feature.packedASCII else {
             return false
         }
         return includedFeatureCodes.contains(code)
     }
 
-    static func featureIndex(_ feature: UnsafeRawBufferPointer) -> UInt8? {
+    static func featureIndex(_ feature: borrowing Span<UInt8>) -> UInt8? {
         guard let code = feature.packedASCII else {
             return nil
         }
@@ -328,6 +360,10 @@ enum GeoNamesRecordRules {
 
     static func includeInSearchIndex(featureIndex: UInt8) -> Bool {
         return !searchExcludedFeatureIndexes.contains(featureIndex)
+    }
+
+    static func isCountry(featureIndex: UInt8) -> Bool {
+        return countryFeatureIndexes.contains(featureIndex)
     }
 
     static func populationRank(_ population: UInt32) -> Float {
@@ -340,7 +376,7 @@ enum GeoNamesRecordRules {
 
     static func ranking(
         population: UInt32,
-        feature: UnsafeRawBufferPointer,
+        feature: borrowing Span<UInt8>,
         hasPostcode: Bool
     ) -> Float {
         var result = populationRank(population)
@@ -369,7 +405,7 @@ final class ByteStringInterner {
     private var idsByHash = [UInt64: [UInt16]]()
 
     func findOrInsert(
-        _ bytes: UnsafeRawBufferPointer,
+        _ bytes: borrowing Span<UInt8>,
         file: String,
         line: Int,
         field: Int
@@ -377,7 +413,7 @@ final class ByteStringInterner {
         let hash = Self.hash(bytes)
         if let candidates = idsByHash[hash] {
             for candidate in candidates {
-                if strings[Int(candidate)].utf8.elementsEqual(bytes) {
+                if Self.equals(strings[Int(candidate)].utf8, bytes) {
                     return candidate
                 }
             }
@@ -396,13 +432,31 @@ final class ByteStringInterner {
         return strings.firstIndex(of: value).map(UInt16.init)
     }
 
-    private static func hash(_ bytes: UnsafeRawBufferPointer) -> UInt64 {
+    private static func hash(_ bytes: borrowing Span<UInt8>) -> UInt64 {
         var value: UInt64 = 14_695_981_039_346_656_037
-        for byte in bytes {
+        for index in bytes.indices {
+            let byte = bytes[index]
             value ^= UInt64(byte)
             value &*= 1_099_511_628_211
         }
         return value
+    }
+
+    private static func equals(
+        _ string: String.UTF8View,
+        _ bytes: borrowing Span<UInt8>
+    ) -> Bool {
+        guard string.count == bytes.count else {
+            return false
+        }
+        var index = 0
+        for byte in string {
+            guard byte == bytes[index] else {
+                return false
+            }
+            index += 1
+        }
+        return true
     }
 }
 
@@ -411,12 +465,28 @@ private struct AdminCodeEntry {
     let codes: [Data]
     let geonameID: Int32
 
-    func matches(country: UInt16, codes: [UnsafeRawBufferPointer]) -> Bool {
-        guard self.country == country, self.codes.count == codes.count else {
+    func matches(
+        country: UInt16,
+        level: Int,
+        code1: borrowing Span<UInt8>,
+        code2: borrowing Span<UInt8>,
+        code3: borrowing Span<UInt8>,
+        code4: borrowing Span<UInt8>
+    ) -> Bool {
+        guard self.country == country, codes.count == level + 1 else {
             return false
         }
-        for index in codes.indices where !self.codes[index].elementsEqual(codes[index]) {
-            return false
+        for index in 0...level {
+            let code: Span<UInt8>
+            switch index {
+            case 0: code = copy code1
+            case 1: code = copy code2
+            case 2: code = copy code3
+            default: code = copy code4
+            }
+            guard codes[index].elementsEqual(code) else {
+                return false
+            }
         }
         return true
     }
@@ -428,14 +498,35 @@ struct AdminCodeLookup {
     mutating func insert(
         level: Int,
         country: UInt16,
-        codes: [UnsafeRawBufferPointer],
+        code1: borrowing Span<UInt8>,
+        code2: borrowing Span<UInt8>,
+        code3: borrowing Span<UInt8>,
+        code4: borrowing Span<UInt8>,
         geonameID: Int32
     ) {
-        let relevant = Array(codes.prefix(level + 1))
-        let hash = Self.hash(country: country, codes: relevant)
+        let hash = Self.hash(
+            country: country,
+            level: level,
+            code1: code1,
+            code2: code2,
+            code3: code3,
+            code4: code4
+        )
+        var storedCodes = [Data]()
+        storedCodes.reserveCapacity(level + 1)
+        storedCodes.append(code1.copiedData())
+        if level >= 1 {
+            storedCodes.append(code2.copiedData())
+        }
+        if level >= 2 {
+            storedCodes.append(code3.copiedData())
+        }
+        if level >= 3 {
+            storedCodes.append(code4.copiedData())
+        }
         let entry = AdminCodeEntry(
             country: country,
-            codes: relevant.map { $0.copiedData() },
+            codes: storedCodes,
             geonameID: geonameID
         )
         levels[level][hash, default: []].append(entry)
@@ -444,26 +535,54 @@ struct AdminCodeLookup {
     func find(
         level: Int,
         country: UInt16,
-        codes: [UnsafeRawBufferPointer]
+        code1: borrowing Span<UInt8>,
+        code2: borrowing Span<UInt8>,
+        code3: borrowing Span<UInt8>,
+        code4: borrowing Span<UInt8>
     ) -> Int32 {
-        let relevant = Array(codes.prefix(level + 1))
-        let hash = Self.hash(country: country, codes: relevant)
+        let hash = Self.hash(
+            country: country,
+            level: level,
+            code1: code1,
+            code2: code2,
+            code3: code3,
+            code4: code4
+        )
         return levels[level][hash]?.first {
-            $0.matches(country: country, codes: relevant)
+            $0.matches(
+                country: country,
+                level: level,
+                code1: code1,
+                code2: code2,
+                code3: code3,
+                code4: code4
+            )
         }?.geonameID ?? 0
     }
 
     private static func hash(
         country: UInt16,
-        codes: [UnsafeRawBufferPointer]
+        level: Int,
+        code1: borrowing Span<UInt8>,
+        code2: borrowing Span<UInt8>,
+        code3: borrowing Span<UInt8>,
+        code4: borrowing Span<UInt8>
     ) -> UInt64 {
         var value: UInt64 = 14_695_981_039_346_656_037
         value ^= UInt64(country)
         value &*= 1_099_511_628_211
-        for code in codes {
+        for index in 0...level {
+            let code: Span<UInt8>
+            switch index {
+            case 0: code = copy code1
+            case 1: code = copy code2
+            case 2: code = copy code3
+            default: code = copy code4
+            }
             value ^= 255
             value &*= 1_099_511_628_211
-            for byte in code {
+            for byteIndex in code.indices {
+                let byte = code[byteIndex]
                 value ^= UInt64(byte)
                 value &*= 1_099_511_628_211
             }
@@ -473,12 +592,17 @@ struct AdminCodeLookup {
 }
 
 extension Data {
-    fileprivate func elementsEqual(_ other: UnsafeRawBufferPointer) -> Bool {
+    fileprivate func elementsEqual(
+        _ other: borrowing Span<UInt8>
+    ) -> Bool {
         guard count == other.count else {
             return false
         }
-        return withUnsafeBytes { bytes in
-            bytes.elementsEqual(other)
+        return withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            for index in other.indices where bytes[index] != other[index] {
+                return false
+            }
+            return true
         }
     }
 }

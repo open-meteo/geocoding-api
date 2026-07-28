@@ -40,12 +40,38 @@ enum PackedRadixIndexLayout {
     static func decodeRankBound(_ value: UInt16) -> Float {
         return value == emptyRankBound ? -.infinity : Float(value) / rankScale
     }
+
+    static func rankUpperBound(
+        bytes: UnsafeRawBufferPointer,
+        offset: Int,
+        queryCharacters: Int,
+        onlyExact: Bool
+    ) -> Float {
+        var result = -Float.infinity
+        for index in 0..<rankBinCount {
+            let rank = decodeRankBound(bytes.readUInt16(at: offset + index * 2))
+            guard rank.isFinite else {
+                continue
+            }
+            let minimumLength = max(
+                queryCharacters,
+                rankBinLowerBounds[index]
+            )
+            let boost: Float
+            if onlyExact || minimumLength == queryCharacters {
+                boost = 1.5
+            } else {
+                boost = 1.5 / Float(minimumLength - queryCharacters + 1)
+            }
+            result = max(result, rank + boost)
+        }
+        return result
+    }
 }
 
 struct LengthBinnedRankBounds {
-    var values = [UInt16](
+    var values = InlineArray<12, UInt16>(
         repeating: PackedRadixIndexLayout.emptyRankBound,
-        count: PackedRadixIndexLayout.rankBinCount
     )
 
     mutating func insert(rank: Float, characterCount: UInt16) {
@@ -65,6 +91,13 @@ struct LengthBinnedRankBounds {
             if values[index] == PackedRadixIndexLayout.emptyRankBound || rhs > values[index] {
                 values[index] = rhs
             }
+        }
+    }
+
+    func append(to output: inout [UInt16]) {
+        output.reserveCapacity(output.count + PackedRadixIndexLayout.rankBinCount)
+        for index in values.indices {
+            output.append(values[index])
         }
     }
 

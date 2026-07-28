@@ -70,6 +70,9 @@ enum DatabaseSectionKind: UInt32, CaseIterable, CustomStringConvertible {
     case searchAdminBuckets = 41
     case searchAdminEntries = 42
     case searchAdminTrees = 43
+    case administrativeAliasRecords = 44
+    case administrativeAliasStrings = 45
+    case administrativeAliasCandidates = 46
 
     var description: String {
         return "section-\(rawValue)"
@@ -170,6 +173,9 @@ struct DatabaseFileHeader {
         guard sectionCount <= Self.maximumSectionCount else {
             throw DatabaseFormatError.invalidHeader("section directory is too large")
         }
+        guard bytes[52..<Self.directoryOffset].allSatisfy({ $0 == 0 }) else {
+            throw DatabaseFormatError.invalidHeader("reserved header bytes are not zero")
+        }
 
         var descriptors = [DatabaseSectionDescriptor]()
         descriptors.reserveCapacity(sectionCount)
@@ -188,11 +194,17 @@ struct DatabaseFileHeader {
                 hash: bytes.readUInt64(at: base + 40)
             )
             guard
+                descriptor.flags == 0,
+                bytes.readUInt32(at: base + 36) == 0,
                 descriptor.offset >= UInt64(Self.encodedSize),
+                descriptor.offset & 4095 == 0,
                 descriptor.offset <= fileSize,
                 descriptor.length <= fileSize - descriptor.offset
             else {
-                throw DatabaseFormatError.invalidSection(kind, "range is outside the file")
+                throw DatabaseFormatError.invalidSection(
+                    kind,
+                    "flags, alignment, reserved bytes, or range are invalid"
+                )
             }
             if descriptor.stride > 0 {
                 guard descriptor.count <= UInt64.max / UInt64(descriptor.stride) else {
@@ -203,6 +215,16 @@ struct DatabaseFileHeader {
                 }
             }
             descriptors.append(descriptor)
+        }
+        var previousEnd = UInt64(Self.encodedSize)
+        for descriptor in descriptors.sorted(by: { $0.offset < $1.offset }) {
+            guard descriptor.offset >= previousEnd else {
+                throw DatabaseFormatError.invalidSection(
+                    descriptor.kind,
+                    "section overlaps an earlier section"
+                )
+            }
+            previousEnd = descriptor.offset + descriptor.length
         }
 
         try self.init(
@@ -237,20 +259,41 @@ struct DatabaseFileHeader {
     }
 }
 
-struct MappedDatabaseSection: @unchecked Sendable {
+struct MappedDatabaseSection {
+    private let owner: MappedFile
     let kind: DatabaseSectionKind
     let bytes: UnsafeRawBufferPointer
     let count: Int
     let stride: Int
 
+    init(
+        owner: MappedFile,
+        kind: DatabaseSectionKind,
+        bytes: UnsafeRawBufferPointer,
+        count: Int,
+        stride: Int
+    ) {
+        self.owner = owner
+        self.kind = kind
+        self.bytes = bytes
+        self.count = count
+        self.stride = stride
+    }
+
+    func withSpan<Result>(
+        _ body: (borrowing Span<UInt8>) throws -> Result
+    ) rethrows -> Result {
+        try body(Span(_unsafeBytes: bytes))
+    }
+
     func uint8(at index: Int) -> UInt8 {
         precondition(stride == 1 && index >= 0 && index < count)
-        return bytes[index]
+        return withSpan { $0[index] }
     }
 
     func uint16(at index: Int) -> UInt16 {
         precondition(stride == 2 && index >= 0 && index < count)
-        return bytes.readUInt16(at: index * stride)
+        return withSpan { $0.readUInt16(at: index * stride) }
     }
 
     func int16(at index: Int) -> Int16 {
@@ -259,7 +302,7 @@ struct MappedDatabaseSection: @unchecked Sendable {
 
     func uint32(at index: Int) -> UInt32 {
         precondition(stride == 4 && index >= 0 && index < count)
-        return bytes.readUInt32(at: index * stride)
+        return withSpan { $0.readUInt32(at: index * stride) }
     }
 
     func int32(at index: Int) -> Int32 {
@@ -272,28 +315,83 @@ struct MappedDatabaseSection: @unchecked Sendable {
 
     func uint64(at index: Int) -> UInt64 {
         precondition(stride == 8 && index >= 0 && index < count)
-        return bytes.readUInt64(at: index * stride)
+        return withSpan { $0.readUInt64(at: index * stride) }
     }
 }
 
 extension UnsafeRawBufferPointer {
+    @inline(__always)
     func readUInt16(at offset: Int) -> UInt16 {
         precondition(offset >= 0 && offset + 2 <= count)
-        return UInt16(self[offset]) | (UInt16(self[offset + 1]) << 8)
+        return UInt16(
+            littleEndian: loadUnaligned(
+                fromByteOffset: offset,
+                as: UInt16.self
+            )
+        )
     }
 
+    @inline(__always)
     func readUInt32(at offset: Int) -> UInt32 {
         precondition(offset >= 0 && offset + 4 <= count)
-        return UInt32(self[offset])
-            | (UInt32(self[offset + 1]) << 8)
-            | (UInt32(self[offset + 2]) << 16)
-            | (UInt32(self[offset + 3]) << 24)
+        return UInt32(
+            littleEndian: loadUnaligned(
+                fromByteOffset: offset,
+                as: UInt32.self
+            )
+        )
     }
 
+    @inline(__always)
     func readUInt64(at offset: Int) -> UInt64 {
         precondition(offset >= 0 && offset + 8 <= count)
-        return UInt64(readUInt32(at: offset))
-            | (UInt64(readUInt32(at: offset + 4)) << 32)
+        return UInt64(
+            littleEndian: loadUnaligned(
+                fromByteOffset: offset,
+                as: UInt64.self
+            )
+        )
+    }
+}
+
+extension Span where Element == UInt8 {
+    @inline(__always)
+    func readUInt16(at offset: Int) -> UInt16 {
+        precondition(offset >= 0 && offset + 2 <= count)
+        return withUnsafeBufferPointer {
+            UInt16(
+                littleEndian: UnsafeRawBufferPointer($0).loadUnaligned(
+                    fromByteOffset: offset,
+                    as: UInt16.self
+                )
+            )
+        }
+    }
+
+    @inline(__always)
+    func readUInt32(at offset: Int) -> UInt32 {
+        precondition(offset >= 0 && offset + 4 <= count)
+        return withUnsafeBufferPointer {
+            UInt32(
+                littleEndian: UnsafeRawBufferPointer($0).loadUnaligned(
+                    fromByteOffset: offset,
+                    as: UInt32.self
+                )
+            )
+        }
+    }
+
+    @inline(__always)
+    func readUInt64(at offset: Int) -> UInt64 {
+        precondition(offset >= 0 && offset + 8 <= count)
+        return withUnsafeBufferPointer {
+            UInt64(
+                littleEndian: UnsafeRawBufferPointer($0).loadUnaligned(
+                    fromByteOffset: offset,
+                    as: UInt64.self
+                )
+            )
+        }
     }
 }
 

@@ -25,12 +25,16 @@ private struct SearchTraversalPath {
 
 private struct SearchFrontierItem {
     let upperBound: Float
-    let path: SearchTraversalPath
+    let pathIndex: Int
     let node: UInt32
 }
 
 private struct SearchFrontierHeap {
     private var values = [SearchFrontierItem]()
+
+    init() {
+        values.reserveCapacity(32)
+    }
 
     mutating func insert(_ value: SearchFrontierItem) {
         values.append(value)
@@ -75,6 +79,31 @@ private struct SearchFrontierHeap {
     }
 }
 
+private struct SearchPathKeySet {
+    private var inline = InlineArray<16, UInt64>(repeating: 0)
+    private var count = 0
+    private var overflow: Set<UInt64>?
+
+    mutating func insert(_ key: UInt64) -> Bool {
+        for index in 0..<count where inline[index] == key {
+            return false
+        }
+        if count < inline.count {
+            inline[count] = key
+            count += 1
+            return true
+        }
+        if overflow == nil {
+            var values = Set<UInt64>(minimumCapacity: count * 2)
+            for index in 0..<count {
+                values.insert(inline[index])
+            }
+            overflow = values
+        }
+        return overflow!.insert(key).inserted
+    }
+}
+
 private struct RankedSearchResult {
     let row: UInt32
     let id: Int32
@@ -84,12 +113,14 @@ private struct RankedSearchResult {
 private struct TopKResultHeap {
     let capacity: Int
     private var heap = [RankedSearchResult]()
-    private var indexByRow = [UInt32: Int]()
+    private var indexByRow: [UInt32: Int]?
 
     init(capacity: Int) {
         self.capacity = capacity
         heap.reserveCapacity(capacity)
-        indexByRow.reserveCapacity(capacity)
+        if capacity > 16 {
+            indexByRow = [UInt32: Int](minimumCapacity: capacity)
+        }
     }
 
     var isFull: Bool {
@@ -101,7 +132,10 @@ private struct TopKResultHeap {
     }
 
     mutating func insert(row: UInt32, id: Int32, score: Float) {
-        if let index = indexByRow[row] {
+        let existingIndex =
+            indexByRow?[row]
+            ?? (indexByRow == nil ? heap.firstIndex(where: { $0.row == row }) : nil)
+        if let index = existingIndex {
             guard score > heap[index].score else {
                 return
             }
@@ -112,16 +146,16 @@ private struct TopKResultHeap {
         let value = RankedSearchResult(row: row, id: id, score: score)
         if heap.count < capacity {
             heap.append(value)
-            indexByRow[row] = heap.count - 1
+            indexByRow?[row] = heap.count - 1
             siftUp(from: heap.count - 1)
             return
         }
         guard let worst, isBetter(value, than: worst) else {
             return
         }
-        indexByRow.removeValue(forKey: worst.row)
+        indexByRow?.removeValue(forKey: worst.row)
         heap[0] = value
-        indexByRow[row] = 0
+        indexByRow?[row] = 0
         siftDown(from: 0)
     }
 
@@ -147,8 +181,8 @@ private struct TopKResultHeap {
 
     private mutating func swap(_ lhs: Int, _ rhs: Int) {
         heap.swapAt(lhs, rhs)
-        indexByRow[heap[lhs].row] = lhs
-        indexByRow[heap[rhs].row] = rhs
+        indexByRow?[heap[lhs].row] = lhs
+        indexByRow?[heap[rhs].row] = rhs
     }
 
     private mutating func siftUp(from start: Int) {
@@ -183,8 +217,10 @@ private struct TopKResultHeap {
     }
 }
 
-final class PackedRadixSearchIndex: @unchecked Sendable {
-    private let database: GeocodingDatabase
+final class PackedRadixSearchIndex {
+    private let mappedFile: MappedFile
+    private let rowIDs: UnsafeRawBufferPointer
+    private let recordCount: Int
     private let nodes: UnsafeRawBufferPointer
     private let edges: UnsafeRawBufferPointer
     private let labels: UnsafeRawBufferPointer
@@ -197,35 +233,37 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
     private let adminBuckets: UnsafeRawBufferPointer
     private let adminEntries: UnsafeRawBufferPointer
     private let adminTrees: UnsafeRawBufferPointer
-    private let roots: [UInt16: RadixIndexRoot]
+    private let roots: [RadixIndexRoot?]
     private let countryBucketCount: Int
     private let adminBucketCount: Int
 
-    init(database: GeocodingDatabase) {
-        self.database = database
-        nodes = database.rawSection(.searchNodes)
-        edges = database.rawSection(.searchEdges)
-        labels = database.rawSection(.searchEdgeLabels)
-        metadata = database.rawSection(.searchNameMetadata)
-        postings = database.rawSection(.searchPostings)
-        globalTrees = database.rawSection(.searchGlobalTrees)
-        countryBuckets = database.rawSection(.searchCountryBuckets)
-        countryEntries = database.rawSection(.searchCountryEntries)
-        countryTrees = database.rawSection(.searchCountryTrees)
-        adminBuckets = database.rawSection(.searchAdminBuckets)
-        adminEntries = database.rawSection(.searchAdminEntries)
-        adminTrees = database.rawSection(.searchAdminTrees)
-        countryBucketCount = Int(
-            database.sectionDescriptor(.searchCountryBuckets).count
-        )
-        adminBucketCount = Int(
-            database.sectionDescriptor(.searchAdminBuckets).count
-        )
+    init(
+        mappedFile: MappedFile,
+        header: DatabaseFileHeader,
+        sections: [DatabaseSectionKind: UnsafeRawBufferPointer]
+    ) {
+        self.mappedFile = mappedFile
+        rowIDs = sections[.rowToID]!
+        recordCount = Int(header.recordCount)
+        nodes = sections[.searchNodes]!
+        edges = sections[.searchEdges]!
+        labels = sections[.searchEdgeLabels]!
+        metadata = sections[.searchNameMetadata]!
+        postings = sections[.searchPostings]!
+        globalTrees = sections[.searchGlobalTrees]!
+        countryBuckets = sections[.searchCountryBuckets]!
+        countryEntries = sections[.searchCountryEntries]!
+        countryTrees = sections[.searchCountryTrees]!
+        adminBuckets = sections[.searchAdminBuckets]!
+        adminEntries = sections[.searchAdminEntries]!
+        adminTrees = sections[.searchAdminTrees]!
+        countryBucketCount = Int(header.sections[.searchCountryBuckets]!.count)
+        adminBucketCount = Int(header.sections[.searchAdminBuckets]!.count)
 
-        let bytes = database.rawSection(.searchRoots)
-        let count = Int(database.sectionDescriptor(.searchRoots).count)
-        var roots = [UInt16: RadixIndexRoot]()
-        roots.reserveCapacity(count)
+        let bytes = sections[.searchRoots]!
+        let count = Int(header.sections[.searchRoots]!.count)
+        var decodedRoots = [RadixIndexRoot]()
+        decodedRoots.reserveCapacity(count)
         for index in 0..<count {
             let offset = index * PackedRadixIndexLayout.rootStride
             let root = RadixIndexRoot(
@@ -236,7 +274,15 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
                 treeStart: bytes.readUInt32(at: offset + 16),
                 treeLeafBase: bytes.readUInt32(at: offset + 20)
             )
-            roots[root.indexID] = root
+            decodedRoots.append(root)
+        }
+        let maximumIndexID = decodedRoots.map(\.indexID).max() ?? 0
+        var roots = [RadixIndexRoot?](
+            repeating: nil,
+            count: Int(maximumIndexID) + 1
+        )
+        for root in decodedRoots {
+            roots[Int(root.indexID)] = root
         }
         self.roots = roots
     }
@@ -248,16 +294,48 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
         countryCode: String?,
         administrativeArea: AdministrativeAreaResolver.Resolution?
     ) -> [(Int32, Float)] {
-        let normalized =
-            value
-            .folding(options: .diacriticInsensitive, locale: nil)
-            .lowercased()
-        let query = Array(normalized.utf8)
-        guard !query.isEmpty else {
+        let normalized = SearchTextNormalizer.foldAndLowercase(value)
+        guard !normalized.isEmpty else {
             return []
         }
         let queryCharacters = normalized.count
         let onlyExact = value.count <= 2
+        if let result = normalized.utf8.withContiguousStorageIfAvailable({
+            search(
+                query: Span(_unsafeElements: $0),
+                queryCharacters: queryCharacters,
+                onlyExact: onlyExact,
+                languageID: languageID,
+                count: count,
+                countryCode: countryCode,
+                administrativeArea: administrativeArea
+            )
+        }) {
+            return result
+        }
+        let copiedQuery = Array(normalized.utf8)
+        return copiedQuery.withUnsafeBufferPointer {
+            search(
+                query: Span(_unsafeElements: $0),
+                queryCharacters: queryCharacters,
+                onlyExact: onlyExact,
+                languageID: languageID,
+                count: count,
+                countryCode: countryCode,
+                administrativeArea: administrativeArea
+            )
+        }
+    }
+
+    private func search(
+        query: borrowing Span<UInt8>,
+        queryCharacters: Int,
+        onlyExact: Bool,
+        languageID: UInt16,
+        count: Int,
+        countryCode: String?,
+        administrativeArea: AdministrativeAreaResolver.Resolution?
+    ) -> [(Int32, Float)] {
         let explicitCountry = countryCode.flatMap(GeocodingDatabase.countryValue)
         if countryCode != nil, explicitCountry == nil {
             return []
@@ -266,15 +344,25 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
             return []
         }
 
-        let indexIDs: [UInt16] =
-            languageID == UInt16.max ? [0] : [0, languageID + 1]
+        var indexIDs = InlineArray<2, UInt16>(repeating: 0)
+        let indexCount: Int
+        if languageID == UInt16.max {
+            indexCount = 1
+        } else {
+            indexIDs[1] = languageID + 1
+            indexCount = 2
+        }
         var frontier = SearchFrontierHeap()
         var results = TopKResultHeap(capacity: count)
-        var pathKeys = Set<UInt64>()
+        var pathKeys = SearchPathKeySet()
+        var paths = [SearchTraversalPath]()
+        paths.reserveCapacity(8)
 
-        for indexID in indexIDs {
+        for indexOffset in 0..<indexCount {
+            let indexID = indexIDs[indexOffset]
             guard
-                let root = roots[indexID],
+                Int(indexID) < roots.count,
+                let root = roots[Int(indexID)],
                 let match = prefixMatch(root: root, query: query)
             else {
                 continue
@@ -300,6 +388,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
                         queryCharacters: queryCharacters,
                         countryFilter: explicitCountry,
                         keySet: &pathKeys,
+                        paths: &paths,
                         frontier: &frontier,
                         results: &results
                     )
@@ -314,6 +403,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
                         queryCharacters: queryCharacters,
                         countryFilter: explicitCountry,
                         keySet: &pathKeys,
+                        paths: &paths,
                         frontier: &frontier,
                         results: &results
                     )
@@ -328,6 +418,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
                     queryCharacters: queryCharacters,
                     countryFilter: explicitCountry,
                     keySet: &pathKeys,
+                    paths: &paths,
                     frontier: &frontier,
                     results: &results
                 )
@@ -347,8 +438,11 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
                     terminal: match.terminal,
                     countryFilter: nil
                 )
+                let pathIndex = paths.count
+                paths.append(path)
                 addRange(
                     path: path,
+                    pathIndex: pathIndex,
                     range: range,
                     queryCharacters: queryCharacters,
                     onlyExact: onlyExact,
@@ -364,30 +458,33 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
             {
                 break
             }
-            if item.node < item.path.treeLeafBase {
+            let path = paths[item.pathIndex]
+            if item.node < path.treeLeafBase {
                 addTreeNode(
-                    path: item.path,
+                    path: path,
+                    pathIndex: item.pathIndex,
                     node: item.node * 2,
                     queryCharacters: queryCharacters,
                     onlyExact: onlyExact,
                     frontier: &frontier
                 )
                 addTreeNode(
-                    path: item.path,
+                    path: path,
+                    pathIndex: item.pathIndex,
                     node: item.node * 2 + 1,
                     queryCharacters: queryCharacters,
                     onlyExact: onlyExact,
                     frontier: &frontier
                 )
             } else {
-                let block = item.node - item.path.treeLeafBase
+                let block = item.node - path.treeLeafBase
                 let lower = block * UInt32(PackedRadixIndexLayout.namesPerLeaf)
                 let upper = min(
-                    item.path.itemCount,
+                    path.itemCount,
                     lower + UInt32(PackedRadixIndexLayout.namesPerLeaf)
                 )
                 scanItems(
-                    path: item.path,
+                    path: path,
                     range: lower..<upper,
                     queryCharacters: queryCharacters,
                     results: &results
@@ -399,7 +496,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
 
     private func prefixMatch(
         root: RadixIndexRoot,
-        query: [UInt8]
+        query: borrowing Span<UInt8>
     ) -> RadixPrefixMatch? {
         var node = root.rootNode
         var queryOffset = 0
@@ -512,7 +609,8 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
         onlyExact: Bool,
         queryCharacters: Int,
         countryFilter: UInt16?,
-        keySet: inout Set<UInt64>,
+        keySet: inout SearchPathKeySet,
+        paths: inout [SearchTraversalPath],
         frontier: inout SearchFrontierHeap,
         results: inout TopKResultHeap
     ) {
@@ -520,7 +618,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
             UInt64(scope.rawValue) << 56
             | UInt64(root.indexID) << 40
             | UInt64(area)
-        guard keySet.insert(key).inserted,
+        guard keySet.insert(key),
             let bucket = areaBucket(scope: scope, indexID: root.indexID, area: area)
         else {
             return
@@ -553,8 +651,11 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
             terminal: match.terminal,
             countryFilter: countryFilter
         )
+        let pathIndex = paths.count
+        paths.append(path)
         addRange(
             path: path,
+            pathIndex: pathIndex,
             range: lower..<upper,
             queryCharacters: queryCharacters,
             onlyExact: onlyExact,
@@ -565,6 +666,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
 
     private func addRange(
         path: SearchTraversalPath,
+        pathIndex: Int,
         range: Range<UInt32>,
         queryCharacters: Int,
         onlyExact: Bool,
@@ -601,6 +703,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
             if left & 1 == 1 {
                 addTreeNode(
                     path: path,
+                    pathIndex: pathIndex,
                     node: left,
                     queryCharacters: queryCharacters,
                     onlyExact: onlyExact,
@@ -612,6 +715,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
                 right -= 1
                 addTreeNode(
                     path: path,
+                    pathIndex: pathIndex,
                     node: right,
                     queryCharacters: queryCharacters,
                     onlyExact: onlyExact,
@@ -625,6 +729,7 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
 
     private func addTreeNode(
         path: SearchTraversalPath,
+        pathIndex: Int,
         node: UInt32,
         queryCharacters: Int,
         onlyExact: Bool,
@@ -632,11 +737,9 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
     ) {
         let tree = treeBytes(scope: path.scope)
         let offset = Int(path.treeStart + node) * PackedRadixIndexLayout.treeNodeStride
-        var summary = LengthBinnedRankBounds()
-        for bin in 0..<PackedRadixIndexLayout.rankBinCount {
-            summary.values[bin] = tree.readUInt16(at: offset + bin * 2)
-        }
-        let bound = summary.upperBound(
+        let bound = PackedRadixIndexLayout.rankUpperBound(
+            bytes: tree,
+            offset: offset,
             queryCharacters: queryCharacters,
             onlyExact: onlyExact
         )
@@ -644,7 +747,11 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
             return
         }
         frontier.insert(
-            SearchFrontierItem(upperBound: bound, path: path, node: node)
+            SearchFrontierItem(
+                upperBound: bound,
+                pathIndex: pathIndex,
+                node: node
+            )
         )
     }
 
@@ -732,7 +839,11 @@ final class PackedRadixSearchIndex: @unchecked Sendable {
             let rowIndex = Int(row)
             results.insert(
                 row: row,
-                id: database.id(row: rowIndex),
+                id: Int32(
+                    bitPattern: rowIDs.readUInt32(
+                        at: rowIndex * MemoryLayout<UInt32>.stride
+                    )
+                ),
                 score: score
             )
         }

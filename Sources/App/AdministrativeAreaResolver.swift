@@ -1,8 +1,8 @@
 import Foundation
 
 /// Resolves country and first-level administrative-area aliases.
-struct AdministrativeAreaResolver {
-    struct Resolution {
+struct AdministrativeAreaResolver: Sendable {
+    struct Resolution: Sendable {
         var admin1IDs: Set<Int32>
         var countryCodes: Set<String>
 
@@ -19,131 +19,14 @@ struct AdministrativeAreaResolver {
         }
     }
 
-    private struct LocalizedAlias: Hashable {
-        let languageID: UInt16
-        let alias: String
-    }
+    private let database: GeocodingDatabase
+    private let recordCount: Int
 
-    private struct Candidate: Hashable {
-        let admin1ID: Int32?
-        let countryCode: String
-    }
-
-    private enum Matches {
-        case single(Candidate)
-        case multiple(Set<Candidate>)
-
-        mutating func insert(_ candidate: Candidate) {
-            switch self {
-            case .single(let existing):
-                if existing != candidate {
-                    self = .multiple([existing, candidate])
-                }
-            case .multiple(var values):
-                values.insert(candidate)
-                self = .multiple(values)
-            }
-        }
-
-        func add(
-            to resolution: inout Resolution,
-            countryCode: String?
-        ) {
-            func addCandidate(_ candidate: Candidate) {
-                guard countryCode == nil || candidate.countryCode == countryCode else {
-                    return
-                }
-                if let id = candidate.admin1ID {
-                    resolution.admin1IDs.insert(id)
-                } else if !candidate.countryCode.isEmpty {
-                    resolution.countryCodes.insert(candidate.countryCode)
-                }
-            }
-            switch self {
-            case .single(let value):
-                addCandidate(value)
-            case .multiple(let values):
-                for value in values {
-                    addCandidate(value)
-                }
-            }
-        }
-    }
-
-    private let common: [String: Matches]
-    private let localized: [LocalizedAlias: Matches]
-    private let abbreviations: [String: Matches]
-
-    init(database: GeocodingDatabase) throws {
-        let abbreviation = database.languageIDs["abbr"]
-        let neutral = database.languageIDs[""]
-        let english = database.languageIDs["en"]
-        var common = [String: Matches]()
-        var localized = [LocalizedAlias: Matches]()
-        var abbreviations = [String: Matches]()
-
-        func insert<Key: Hashable>(
-            _ candidate: Candidate,
-            key: Key,
-            into values: inout [Key: Matches]
-        ) {
-            if var matches = values[key] {
-                matches.insert(candidate)
-                values[key] = matches
-            } else {
-                values[key] = .single(candidate)
-            }
-        }
-
-        for row in 0..<database.recordCount {
-            let feature = database.feature(row: row)
-            let isCountry = Self.isCountry(feature)
-            guard feature == "ADM1" || isCountry else {
-                continue
-            }
-            let candidate = Candidate(
-                admin1ID: isCountry ? nil : database.id(row: row),
-                countryCode: database.countryISO2(row: row)
-            )
-            let canonical = Self.normalize(try database.canonicalName(row: row))
-            if !canonical.isEmpty {
-                insert(candidate, key: canonical, into: &common)
-            }
-            try database.forEachAlternateName(row: row) { languageID, name in
-                let normalized = Self.normalize(name)
-                guard !normalized.isEmpty else {
-                    return
-                }
-                if languageID == abbreviation {
-                    if isCountry {
-                        insert(candidate, key: normalized, into: &common)
-                    } else {
-                        insert(candidate, key: normalized, into: &abbreviations)
-                    }
-                } else if languageID == neutral || languageID == english {
-                    insert(candidate, key: normalized, into: &common)
-                } else {
-                    insert(
-                        candidate,
-                        key: LocalizedAlias(
-                            languageID: languageID,
-                            alias: normalized
-                        ),
-                        into: &localized
-                    )
-                }
-            }
-            if isCountry, !candidate.countryCode.isEmpty {
-                insert(
-                    candidate,
-                    key: Self.normalize(candidate.countryCode),
-                    into: &common
-                )
-            }
-        }
-        self.common = common
-        self.localized = localized
-        self.abbreviations = abbreviations
+    init(database: GeocodingDatabase) {
+        self.database = database
+        recordCount = Int(
+            database.sectionDescriptor(.administrativeAliasRecords).count
+        )
     }
 
     func resolve(
@@ -152,38 +35,152 @@ struct AdministrativeAreaResolver {
         countryCode: String?
     ) -> Resolution {
         let normalized = Self.normalize(value)
-        let country = countryCode.map {
-            $0.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let countryFilter = countryCode.flatMap(GeocodingDatabase.countryValue)
+        if countryCode != nil, countryFilter == nil {
+            return Resolution()
         }
-        if let abbreviation = abbreviations[normalized] {
-            var result = Resolution()
-            abbreviation.add(to: &result, countryCode: country)
-            if !result.isEmpty {
-                return result
-            }
+        if let result = lookup(
+            kind: .abbreviation,
+            languageID: 0,
+            normalized: normalized,
+            countryFilter: countryFilter
+        ), !result.isEmpty {
+            return result
         }
-        var result = Resolution()
-        common[normalized]?.add(to: &result, countryCode: country)
-        localized[
-            LocalizedAlias(languageID: languageID, alias: normalized)
-        ]?.add(to: &result, countryCode: country)
+        var result =
+            lookup(
+                kind: .common,
+                languageID: 0,
+                normalized: normalized,
+                countryFilter: countryFilter
+            ) ?? Resolution()
+        if let localized = lookup(
+            kind: .localized,
+            languageID: languageID,
+            normalized: normalized,
+            countryFilter: countryFilter
+        ) {
+            result.admin1IDs.formUnion(localized.admin1IDs)
+            result.countryCodes.formUnion(localized.countryCodes)
+        }
         return result
     }
 
-    private static func normalize(_ value: String) -> String {
-        return
-            value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: .diacriticInsensitive, locale: nil)
-            .lowercased()
+    private func lookup(
+        kind: AdministrativeAliasKind,
+        languageID: UInt16,
+        normalized: String,
+        countryFilter: UInt16?
+    ) -> Resolution? {
+        func find(_ query: borrowing Span<UInt8>) -> Int? {
+            var low = 0
+            var high = recordCount
+            while low < high {
+                let middle = low + (high - low) / 2
+                let comparison = compareRecord(
+                    at: middle,
+                    kind: kind,
+                    languageID: languageID,
+                    query: query
+                )
+                if comparison < 0 {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            guard
+                low < recordCount,
+                compareRecord(
+                    at: low,
+                    kind: kind,
+                    languageID: languageID,
+                    query: query
+                ) == 0
+            else {
+                return nil
+            }
+            return low
+        }
+
+        let record: Int?
+        if let found = normalized.utf8.withContiguousStorageIfAvailable({
+            find(Span(_unsafeElements: $0))
+        }) {
+            record = found
+        } else {
+            let copy = Array(normalized.utf8)
+            record = copy.withUnsafeBufferPointer {
+                find(Span(_unsafeElements: $0))
+            }
+        }
+        guard let record else {
+            return nil
+        }
+
+        let records = database.rawSection(.administrativeAliasRecords)
+        let candidates = database.rawSection(.administrativeAliasCandidates)
+        let offset = record * AdministrativeAliasIndexLayout.recordStride
+        let start = Int(records.readUInt32(at: offset + 8))
+        let count = Int(records.readUInt16(at: offset + 12))
+        var result = Resolution()
+        for index in start..<start + count {
+            let candidateOffset =
+                index * AdministrativeAliasIndexLayout.candidateStride
+            let country = candidates.readUInt16(at: candidateOffset + 4)
+            guard countryFilter == nil || countryFilter == country else {
+                continue
+            }
+            let admin1ID = candidates.readUInt32(at: candidateOffset)
+            if admin1ID == 0 {
+                result.countryCodes.insert(
+                    GeocodingDatabase.countryString(country)
+                )
+            } else {
+                result.admin1IDs.insert(Int32(bitPattern: admin1ID))
+            }
+        }
+        return result
     }
 
-    private static func isCountry(_ feature: String) -> Bool {
-        switch feature {
-        case "PCLI", "PCLD", "PCLIX", "PCLS", "PCLF", "PCL":
-            return true
-        default:
-            return false
+    private func compareRecord(
+        at index: Int,
+        kind: AdministrativeAliasKind,
+        languageID: UInt16,
+        query: borrowing Span<UInt8>
+    ) -> Int {
+        let records = database.rawSection(.administrativeAliasRecords)
+        let strings = database.rawSection(.administrativeAliasStrings)
+        let offset = index * AdministrativeAliasIndexLayout.recordStride
+        let candidateKind = records[offset]
+        if candidateKind != kind.rawValue {
+            return candidateKind < kind.rawValue ? -1 : 1
         }
+        let candidateLanguage = records.readUInt16(at: offset + 2)
+        if candidateLanguage != languageID {
+            return candidateLanguage < languageID ? -1 : 1
+        }
+        let stringOffset = Int(records.readUInt32(at: offset + 4))
+        let length = Int(strings.readUInt32(at: stringOffset))
+        let candidate = UnsafeRawBufferPointer(
+            rebasing: strings[
+                stringOffset + 4..<stringOffset + 4 + length
+            ]
+        )
+        let commonCount = min(candidate.count, query.count)
+        for byte in 0..<commonCount where candidate[byte] != query[byte] {
+            return candidate[byte] < query[byte] ? -1 : 1
+        }
+        if candidate.count == query.count {
+            return 0
+        }
+        return candidate.count < query.count ? -1 : 1
     }
+
+    static func normalize(_ value: String) -> String {
+        return SearchTextNormalizer.foldAndLowercase(
+            value.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
 }

@@ -14,6 +14,8 @@ ISO-2 country filtering is implemented inside the packed search traversal, befor
 
 ## Database build
 
+Building the current source requires Swift 6.2 or newer.
+
 The service uses `data/database-v2.bin`, a versioned, sectioned binary database read with
 `mmap`. The record data is stored in structure-of-arrays columns. Search names are stored
 once per language/index in packed radix tries, with shared posting lists for matching
@@ -122,11 +124,26 @@ power-of-two `treeLeafBase` stored in the corresponding root or area bucket loca
 leaf. These conservative bounds allow top-K traversal to skip subtrees that cannot beat the
 current result set.
 
+The database contains an exact-match administrative-alias index for country and first-level
+administrative-area qualifiers:
+
+| ID | Administrative-alias section | Record layout |
+|---:|---|---|
+| 44 | `administrativeAliasRecords` | 16 bytes: `u8 kind`, `u8 reserved`, `u16 languageID`, `u32 nameOffset`, `u32 candidateStart`, `u16 candidateCount`, `u16 reserved` |
+| 45 | `administrativeAliasStrings` | Length-prefixed normalized UTF-8 aliases |
+| 46 | `administrativeAliasCandidates` | 8 bytes: `u32 admin1ID`, packed `u16 country`, `u16 reserved`; an `admin1ID` of zero denotes the country itself |
+
+Alias records are sorted by kind, language, and normalized UTF-8 bytes, so resolution is a
+binary search followed by a short contiguous candidate scan. All three sections are required;
+a database missing any of them is rejected and rebuilt from the source files when available.
+
 The loader validates the header, section ranges and strides, UTF-8 tables, radix references,
-posting ranges, sorted sparse ordinals, and rank-tree ranges before serving requests. The
-authoritative definitions are in
+radix reachability, posting rows and ordering, dense ID-map consistency, variable-length
+ranges, sorted sparse ordinals, rank-tree ranges, and administrative aliases before serving
+requests. The authoritative definitions are in
 [`DatabaseFileFormat.swift`](Sources/App/DatabaseFileFormat.swift) and
-[`PackedRadixIndexFormat.swift`](Sources/App/PackedRadixIndexFormat.swift).
+[`PackedRadixIndexFormat.swift`](Sources/App/PackedRadixIndexFormat.swift), plus
+[`AdministrativeAliasIndexFormat.swift`](Sources/App/AdministrativeAliasIndexFormat.swift).
 
 After downloading and extracting the two GeoNames inputs, build the database explicitly:
 
@@ -142,11 +159,13 @@ swift run -c release Run build-database --force
 ```
 
 The builder streams both TSV files, partitions its temporary data, and atomically renames a
-fully validated output file into place. An existing `database-v2.bin` is preserved unless
-`--force` is supplied. The old protobuf `database.bin` is not converted or loaded; rebuild
-from the source TSV files. The packed-radix layout is format version 2 and is intentionally
-not compatible with earlier experimental `database-v2.bin` files; those files must also be
-rebuilt.
+fully validated output file into place. Independent search runs are sorted concurrently with
+an automatically selected limit derived from available processors, partition sizes, and
+`--memory-limit-mb`; there is no separate worker setting. An existing `database-v2.bin` is
+preserved unless `--force` is supplied. The old protobuf `database.bin` is not converted or
+loaded; rebuild from the source TSV files. The packed-radix layout is format version 2 and is
+intentionally not compatible with earlier experimental `database-v2.bin` files; those files
+must also be rebuilt.
 
 On the full GeoNames dataset, a measured release build completed in approximately 2 minutes
 15 seconds, used about 808 MiB of peak memory, and produced a 1.37 GB database. Build time

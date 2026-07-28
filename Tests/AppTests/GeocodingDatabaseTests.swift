@@ -14,9 +14,9 @@ final class GeocodingDatabaseTests: XCTestCase {
         temporaryDirectories.removeAll()
     }
 
-    func testBuildLoadSearchAndLocalizedResponse() throws {
+    func testBuildLoadSearchAndLocalizedResponse() async throws {
         let paths = try makeFixture(name: "primary")
-        try GeocodingDatabaseBuilder(
+        try await GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -26,6 +26,9 @@ final class GeocodingDatabaseTests: XCTestCase {
         XCTAssertEqual(database.recordCount, 8)
         XCTAssertEqual(database.header.maximumGeonameID, 220)
         XCTAssertTrue(database.header.sections.values.allSatisfy { $0.offset % 4096 == 0 })
+        XCTAssertNotNil(database.header.sections[.administrativeAliasRecords])
+        XCTAssertNotNil(database.header.sections[.administrativeAliasStrings])
+        XCTAssertNotNil(database.header.sections[.administrativeAliasCandidates])
 
         let english = try XCTUnwrap(database.languageIDs["en"])
         let german = try XCTUnwrap(database.languageIDs["de"])
@@ -82,7 +85,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         )
         XCTAssertTrue(historic.isEmpty)
 
-        let lookup = try AdministrativeAreaResolver(database: database)
+        let lookup = AdministrativeAreaResolver(database: database)
         let area = lookup.resolve("NR", languageID: english, countryCode: "TL")
         let filtered = database.searchIndex.search(
             "Spring",
@@ -112,16 +115,16 @@ final class GeocodingDatabaseTests: XCTestCase {
         XCTAssertTrue(excludedByCountry.isEmpty)
     }
 
-    func testAdministrativeAreaResolution() throws {
+    func testAdministrativeAreaResolution() async throws {
         let paths = try makeFixture(name: "administrative-areas")
-        try GeocodingDatabaseBuilder(
+        try await GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
         ).build()
 
         let database = try GeocodingDatabase(url: paths.databaseFile)
-        let resolver = try AdministrativeAreaResolver(database: database)
+        let resolver = AdministrativeAreaResolver(database: database)
         let english = try XCTUnwrap(database.languageIDs["en"])
         let german = try XCTUnwrap(database.languageIDs["de"])
         let french = try XCTUnwrap(database.languageIDs["fr"])
@@ -182,7 +185,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         )
     }
 
-    func testAllCountryFeatureCodesAreResolved() throws {
+    func testAllCountryFeatureCodesAreResolved() async throws {
         let featureCodes = ["PCLI", "PCLD", "PCLIX", "PCLS", "PCLF", "PCL"]
         let countryCodes = ["AA", "AB", "AC", "AD", "AE", "AF"]
         let rows = featureCodes.enumerated().map { offset, feature in
@@ -210,14 +213,14 @@ final class GeocodingDatabaseTests: XCTestCase {
                 )
             } + [alternate(7, 1, "post", "0000")]
         )
-        try GeocodingDatabaseBuilder(
+        try await GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
         ).build()
 
         let database = try GeocodingDatabase(url: paths.databaseFile)
-        let resolver = try AdministrativeAreaResolver(database: database)
+        let resolver = AdministrativeAreaResolver(database: database)
         for (offset, feature) in featureCodes.enumerated() {
             let resolution = resolver.resolve(
                 "\(feature) Territory",
@@ -229,9 +232,9 @@ final class GeocodingDatabaseTests: XCTestCase {
         }
     }
 
-    func testRadixPrefixBoundariesAndExactMatching() throws {
+    func testRadixPrefixBoundariesAndExactMatching() async throws {
         let paths = try makeFixture(name: "radix-boundaries")
-        try GeocodingDatabaseBuilder(
+        try await GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -308,12 +311,12 @@ final class GeocodingDatabaseTests: XCTestCase {
         )
     }
 
-    func testBuildIsDeterministic() throws {
+    func testBuildIsDeterministic() async throws {
         let first = try makeFixture(name: "deterministic-a")
         let second = try makeFixture(name: "deterministic-b")
         let logger = Logger(label: "database-test")
-        try GeocodingDatabaseBuilder(logger: logger, paths: first).build()
-        try GeocodingDatabaseBuilder(logger: logger, paths: second).build()
+        try await GeocodingDatabaseBuilder(logger: logger, paths: first).build()
+        try await GeocodingDatabaseBuilder(logger: logger, paths: second).build()
         XCTAssertEqual(
             try Data(contentsOf: first.databaseFile),
             try Data(contentsOf: second.databaseFile)
@@ -331,9 +334,9 @@ final class GeocodingDatabaseTests: XCTestCase {
         }
     }
 
-    func testRejectsCorruptRadixEdge() throws {
+    func testRejectsCorruptRadixEdge() async throws {
         let paths = try makeFixture(name: "corrupt-edge")
-        try GeocodingDatabaseBuilder(
+        try await GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -353,6 +356,76 @@ final class GeocodingDatabaseTests: XCTestCase {
 
         XCTAssertThrowsError(try GeocodingDatabase(url: corruptFile)) { error in
             guard case DatabaseFormatError.invalidSection(.searchEdges, _) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRejectsInvalidPostingAndAdministrativeAliasRanges() async throws {
+        let paths = try makeFixture(name: "corrupt-structural-ranges")
+        try await GeocodingDatabaseBuilder(
+            logger: Logger(label: "database-test"),
+            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
+            paths: paths
+        ).build()
+
+        let database = try GeocodingDatabase(url: paths.databaseFile)
+        let original = try Data(contentsOf: paths.databaseFile)
+
+        var corruptPosting = original
+        let postingDescriptor = database.sectionDescriptor(.searchPostings)
+        corruptPosting.writeLittleEndian(
+            UInt32.max,
+            at: Int(postingDescriptor.offset)
+        )
+        let postingFile = paths.databaseFile
+            .deletingLastPathComponent()
+            .appendingPathComponent("corrupt-posting.bin")
+        try corruptPosting.write(to: postingFile)
+        XCTAssertThrowsError(try GeocodingDatabase(url: postingFile)) { error in
+            guard case DatabaseFormatError.invalidSection(.searchPostings, _) = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        var corruptAlias = original
+        let aliasDescriptor = database.sectionDescriptor(.administrativeAliasRecords)
+        corruptAlias.writeLittleEndian(
+            UInt32.max,
+            at: Int(aliasDescriptor.offset) + 8
+        )
+        let aliasFile = paths.databaseFile
+            .deletingLastPathComponent()
+            .appendingPathComponent("corrupt-alias.bin")
+        try corruptAlias.write(to: aliasFile)
+        XCTAssertThrowsError(try GeocodingDatabase(url: aliasFile)) { error in
+            guard
+                case DatabaseFormatError.invalidSection(
+                    .administrativeAliasRecords,
+                    _
+                ) = error
+            else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        var missingAliasSection = original
+        missingAliasSection.writeLittleEndian(
+            UInt32(database.header.sections.count - 1),
+            at: 48
+        )
+        let missingAliasFile = paths.databaseFile
+            .deletingLastPathComponent()
+            .appendingPathComponent("missing-alias-section.bin")
+        try missingAliasSection.write(to: missingAliasFile)
+        XCTAssertThrowsError(
+            try GeocodingDatabase(url: missingAliasFile)
+        ) { error in
+            guard
+                case DatabaseFormatError.missingSection(
+                    .administrativeAliasCandidates
+                ) = error
+            else {
                 return XCTFail("Unexpected error: \(error)")
             }
         }
