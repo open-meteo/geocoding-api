@@ -22,7 +22,10 @@ extension Message {
             response.body = Response.Body(data: try self.serializedData())
             response.headers.contentType = .init(type: "application", subType: "x-protobuf")
         }
-        response.headers.add(name: "X-Encoding-Time", value: "\(Date().timeIntervalSince(start) * 100) ms")
+        response.headers.add(
+            name: "X-Encoding-Time",
+            value: "\(Date().timeIntervalSince(start) * 1000) ms"
+        )
         return response
     }
 }
