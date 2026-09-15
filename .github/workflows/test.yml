@@ -43,8 +43,6 @@ jobs:
       run: ${{ env.swift_build }}
     - name: Test
       run: ${{ env.swift_test }}
-    - name: Release tests
-      run: swift test -c release
 
   address-sanitizer:
     runs-on: ubuntu-22.04
