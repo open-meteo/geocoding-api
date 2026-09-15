@@ -1,6 +1,6 @@
 import Vapor
 
-public func configure(_ app: Application) throws {
+public func configure(_ app: Application) async throws {
     TimeZone.ReferenceType.default = TimeZone(abbreviation: "GMT")!
 
     app.http.server.configuration.responseCompression = .enabled
@@ -12,9 +12,17 @@ public func configure(_ app: Application) throws {
     app.http.server.configuration.port = 8912
     #endif
 
-    try routes(app)
+    app.asyncCommands.use(BuildDatabaseCommand(), as: "build-database")
+    app.asyncCommands.use(VerifyDatabaseCommand(), as: "verify-database")
+    if let command = app.environment.commandInput.arguments.first,
+        ["build-database", "verify-database"].contains(command)
+    {
+        return
+    }
+
+    try await routes(app)
 }
 
-func routes(_ app: Application) throws {
-    try app.routes.register(collection: try GeocodingapiController(app))
+func routes(_ app: Application) async throws {
+    try app.routes.register(collection: try await GeocodingapiController(app))
 }

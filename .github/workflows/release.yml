@@ -14,7 +14,7 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-22.04
-    container: swift:6.1.0-jammy
+    container: swift:6.3.3-jammy
     name: Linux
     steps:
     - name: Get Swift Version
