@@ -32,11 +32,14 @@ private struct SearchFrontierItem {
 private struct SearchFrontierHeap {
     private var values = [SearchFrontierItem]()
 
-    init() {
-        values.reserveCapacity(32)
+    let diagnostics: SearchDiagnostics?
+
+    init(diagnostics: SearchDiagnostics?) {
+        self.diagnostics = diagnostics
     }
 
     mutating func insert(_ value: SearchFrontierItem) {
+        if values.isEmpty { values.reserveCapacity(32) }
         values.append(value)
         var index = values.count - 1
         while index > 0 {
@@ -50,6 +53,7 @@ private struct SearchFrontierHeap {
     }
 
     mutating func removeMaximum() -> SearchFrontierItem? {
+        if !values.isEmpty { diagnostics?.treeNodesVisited += 1 }
         guard !values.isEmpty else {
             return nil
         }
@@ -104,23 +108,17 @@ private struct SearchPathKeySet {
     }
 }
 
-private struct RankedSearchResult {
-    let row: UInt32
-    let id: Int32
-    var score: Float
-}
+private typealias RankedSearchResult = SearchHit
 
 private struct TopKResultHeap {
     let capacity: Int
     private var heap = [RankedSearchResult]()
-    private var indexByRow: [UInt32: Int]?
 
-    init(capacity: Int) {
+    let diagnostics: SearchDiagnostics?
+
+    init(capacity: Int, diagnostics: SearchDiagnostics?) {
+        self.diagnostics = diagnostics
         self.capacity = capacity
-        heap.reserveCapacity(capacity)
-        if capacity > 16 {
-            indexByRow = [UInt32: Int](minimumCapacity: capacity)
-        }
     }
 
     var isFull: Bool {
@@ -131,40 +129,40 @@ private struct TopKResultHeap {
         return heap.first
     }
 
-    mutating func insert(row: UInt32, id: Int32, score: Float) {
-        let existingIndex =
-            indexByRow?[row]
-            ?? (indexByRow == nil ? heap.firstIndex(where: { $0.row == row }) : nil)
+    mutating func insert(row: UInt32, id: Int32, score: Float, sources: MatchSources) {
+        // The API caps K at 100; scanning avoids hash updates on every heap swap.
+        let existingIndex = heap.firstIndex(where: { $0.row == row })
         if let index = existingIndex {
+            diagnostics?.duplicateHits += 1
+            if score == heap[index].score { heap[index].sources.formUnion(sources) }
             guard score > heap[index].score else {
                 return
             }
+            diagnostics?.heapUpdates += 1
             heap[index].score = score
+            heap[index].sources = sources
             siftDown(from: index)
             return
         }
-        let value = RankedSearchResult(row: row, id: id, score: score)
+        let value = RankedSearchResult(row: row, id: id, score: score, sources: sources)
         if heap.count < capacity {
+            diagnostics?.heapInsertions += 1
+            if heap.isEmpty { heap.reserveCapacity(capacity) }
             heap.append(value)
-            indexByRow?[row] = heap.count - 1
             siftUp(from: heap.count - 1)
             return
         }
         guard let worst, isBetter(value, than: worst) else {
             return
         }
-        indexByRow?.removeValue(forKey: worst.row)
+        diagnostics?.heapReplacements += 1
         heap[0] = value
-        indexByRow?[row] = 0
         siftDown(from: 0)
     }
 
-    func sorted() -> [(Int32, Float)] {
-        return heap.map { ($0.id, $0.score) }.sorted {
-            if $0.1 != $1.1 {
-                return $0.1 > $1.1
-            }
-            return $0.0 < $1.0
+    func sorted() -> [SearchHit] {
+        heap.sorted {
+            $0.score == $1.score ? $0.id < $1.id : $0.score > $1.score
         }
     }
 
@@ -181,8 +179,6 @@ private struct TopKResultHeap {
 
     private mutating func swap(_ lhs: Int, _ rhs: Int) {
         heap.swapAt(lhs, rhs)
-        indexByRow?[heap[lhs].row] = lhs
-        indexByRow?[heap[rhs].row] = rhs
     }
 
     private mutating func siftUp(from start: Int) {
@@ -241,9 +237,9 @@ final class PackedRadixSearchIndex {
         mappedFile: MappedFile,
         header: DatabaseFileHeader,
         sections: [DatabaseSectionKind: UnsafeRawBufferPointer]
-    ) {
+    ) throws {
         self.mappedFile = mappedFile
-        rowIDs = sections[.rowToID]!
+        rowIDs = sections[.locations]!
         recordCount = Int(header.recordCount)
         nodes = sections[.searchNodes]!
         edges = sections[.searchEdges]!
@@ -274,6 +270,17 @@ final class PackedRadixSearchIndex {
                 treeStart: bytes.readUInt32(at: offset + 16),
                 treeLeafBase: bytes.readUInt32(at: offset + 20)
             )
+            let base = Int(root.nameBase)
+            let names = Int(root.nameCount)
+            let leaves = Int(root.treeLeafBase)
+            guard root.nameCount <= 0x7fff_ffff,
+                base <= metadata.count / PackedRadixIndexLayout.nameMetadataStride,
+                names <= metadata.count / PackedRadixIndexLayout.nameMetadataStride - base,
+                Int(root.rootNode) < nodes.count / PackedRadixIndexLayout.nodeStride,
+                leaves > 0, leaves & (leaves - 1) == 0,
+                leaves >= (names + 63) / 64,
+                globalTrees.containsRange(offset: Int(root.treeStart) * 24, length: leaves * 2 * 24)
+            else { throw DatabaseFormatError.invalidSection(.searchRoots, "invalid root ranges") }
             decodedRoots.append(root)
         }
         let maximumIndexID = decodedRoots.map(\.indexID).max() ?? 0
@@ -292,37 +299,43 @@ final class PackedRadixSearchIndex {
         languageID: UInt16,
         count: Int,
         countryCode: String?,
-        administrativeArea: AdministrativeAreaResolver.Resolution?
-    ) -> [(Int32, Float)] {
-        let normalized = SearchTextNormalizer.foldAndLowercase(value)
+        administrativeArea: AdministrativeAreaResolver.Resolution?,
+        diagnostics: SearchDiagnostics? = nil
+    ) throws -> [SearchHit] {
+        defer { withExtendedLifetime(mappedFile) {} }
+        guard count > 0 else { return [] }
+        let prepared = NormalizedSearchQuery(value)
+        let normalized = prepared.text
         guard !normalized.isEmpty else {
             return []
         }
-        let queryCharacters = normalized.count
-        let onlyExact = value.count <= 2
-        if let result = normalized.utf8.withContiguousStorageIfAvailable({
-            search(
+        let queryCharacters = prepared.characterCount
+        let onlyExact = prepared.onlyExact
+        if let result = try normalized.utf8.withContiguousStorageIfAvailable({
+            try search(
                 query: Span(_unsafeElements: $0),
                 queryCharacters: queryCharacters,
                 onlyExact: onlyExact,
                 languageID: languageID,
                 count: count,
                 countryCode: countryCode,
-                administrativeArea: administrativeArea
+                administrativeArea: administrativeArea,
+                diagnostics: diagnostics
             )
         }) {
             return result
         }
         let copiedQuery = Array(normalized.utf8)
-        return copiedQuery.withUnsafeBufferPointer {
-            search(
+        return try copiedQuery.withUnsafeBufferPointer {
+            try search(
                 query: Span(_unsafeElements: $0),
                 queryCharacters: queryCharacters,
                 onlyExact: onlyExact,
                 languageID: languageID,
                 count: count,
                 countryCode: countryCode,
-                administrativeArea: administrativeArea
+                administrativeArea: administrativeArea,
+                diagnostics: diagnostics
             )
         }
     }
@@ -334,8 +347,9 @@ final class PackedRadixSearchIndex {
         languageID: UInt16,
         count: Int,
         countryCode: String?,
-        administrativeArea: AdministrativeAreaResolver.Resolution?
-    ) -> [(Int32, Float)] {
+        administrativeArea: AdministrativeAreaResolver.Resolution?,
+        diagnostics: SearchDiagnostics? = nil
+    ) throws -> [SearchHit] {
         let explicitCountry = countryCode.flatMap(GeocodingDatabase.countryValue)
         if countryCode != nil, explicitCountry == nil {
             return []
@@ -352,18 +366,17 @@ final class PackedRadixSearchIndex {
             indexIDs[1] = languageID + 1
             indexCount = 2
         }
-        var frontier = SearchFrontierHeap()
-        var results = TopKResultHeap(capacity: count)
+        var frontier = SearchFrontierHeap(diagnostics: diagnostics)
+        var results = TopKResultHeap(capacity: count, diagnostics: diagnostics)
         var pathKeys = SearchPathKeySet()
         var paths = [SearchTraversalPath]()
-        paths.reserveCapacity(8)
 
         for indexOffset in 0..<indexCount {
             let indexID = indexIDs[indexOffset]
             guard
                 Int(indexID) < roots.count,
                 let root = roots[Int(indexID)],
-                let match = prefixMatch(root: root, query: query)
+                let match = try prefixMatch(root: root, query: query)
             else {
                 continue
             }
@@ -379,7 +392,7 @@ final class PackedRadixSearchIndex {
                     if let explicitCountry, country != explicitCountry {
                         continue
                     }
-                    addAreaPath(
+                    try addAreaPath(
                         scope: .country,
                         area: UInt32(country),
                         root: root,
@@ -394,7 +407,7 @@ final class PackedRadixSearchIndex {
                     )
                 }
                 for id in administrativeArea.admin1IDs where id > 0 {
-                    addAreaPath(
+                    try addAreaPath(
                         scope: .admin,
                         area: UInt32(bitPattern: id),
                         root: root,
@@ -409,7 +422,7 @@ final class PackedRadixSearchIndex {
                     )
                 }
             } else if let explicitCountry {
-                addAreaPath(
+                try addAreaPath(
                     scope: .country,
                     area: UInt32(explicitCountry),
                     root: root,
@@ -439,8 +452,9 @@ final class PackedRadixSearchIndex {
                     countryFilter: nil
                 )
                 let pathIndex = paths.count
+                if paths.isEmpty { paths.reserveCapacity(8) }
                 paths.append(path)
-                addRange(
+                try addRange(
                     path: path,
                     pathIndex: pathIndex,
                     range: range,
@@ -460,7 +474,7 @@ final class PackedRadixSearchIndex {
             }
             let path = paths[item.pathIndex]
             if item.node < path.treeLeafBase {
-                addTreeNode(
+                try addTreeNode(
                     path: path,
                     pathIndex: item.pathIndex,
                     node: item.node * 2,
@@ -468,7 +482,7 @@ final class PackedRadixSearchIndex {
                     onlyExact: onlyExact,
                     frontier: &frontier
                 )
-                addTreeNode(
+                try addTreeNode(
                     path: path,
                     pathIndex: item.pathIndex,
                     node: item.node * 2 + 1,
@@ -483,7 +497,7 @@ final class PackedRadixSearchIndex {
                     path.itemCount,
                     lower + UInt32(PackedRadixIndexLayout.namesPerLeaf)
                 )
-                scanItems(
+                try scanItems(
                     path: path,
                     range: lower..<upper,
                     queryCharacters: queryCharacters,
@@ -497,14 +511,20 @@ final class PackedRadixSearchIndex {
     private func prefixMatch(
         root: RadixIndexRoot,
         query: borrowing Span<UInt8>
-    ) -> RadixPrefixMatch? {
+    ) throws -> RadixPrefixMatch? {
         var node = root.rootNode
         var queryOffset = 0
         while true {
             let nodeOffset = Int(node) * PackedRadixIndexLayout.nodeStride
+            guard nodes.containsRange(offset: nodeOffset, length: PackedRadixIndexLayout.nodeStride) else {
+                throw DatabaseFormatError.invalidSection(.searchNodes, "invalid query node")
+            }
             if queryOffset == query.count {
                 let first = nodes.readUInt32(at: nodeOffset + 8)
                 let count = nodes.readUInt32(at: nodeOffset + 12)
+                guard first < root.nameCount, count <= root.nameCount - first else {
+                    throw DatabaseFormatError.invalidSection(.searchNodes, "invalid query ordinal range")
+                }
                 let terminal =
                     nodes.readUInt16(at: nodeOffset + 6) & 1 == 1
                     ? first : nil
@@ -516,7 +536,7 @@ final class PackedRadixSearchIndex {
             let firstEdge = Int(nodes.readUInt32(at: nodeOffset))
             let edgeCount = Int(nodes.readUInt16(at: nodeOffset + 4))
             guard
-                let edge = findEdge(
+                let edge = try findEdge(
                     first: firstEdge,
                     count: edgeCount,
                     firstByte: query[queryOffset]
@@ -530,6 +550,11 @@ final class PackedRadixSearchIndex {
             let leafOrdinal = child & 0x7fff_ffff
             let labelOffset = Int(edges.readUInt32(at: edgeOffset + 4))
             let labelLength = Int(edges.readUInt16(at: edgeOffset + 8))
+            guard labelLength > 0, labels.containsRange(offset: labelOffset, length: labelLength),
+                !isLeaf || leafOrdinal < root.nameCount
+            else {
+                throw DatabaseFormatError.invalidSection(.searchEdges, "invalid query edge")
+            }
             var labelIndex = 0
             while labelIndex < labelLength, queryOffset < query.count {
                 guard labels[labelOffset + labelIndex] == query[queryOffset] else {
@@ -546,8 +571,14 @@ final class PackedRadixSearchIndex {
                     )
                 }
                 let childOffset = Int(child) * PackedRadixIndexLayout.nodeStride
+                guard nodes.containsRange(offset: childOffset, length: PackedRadixIndexLayout.nodeStride) else {
+                    throw DatabaseFormatError.invalidSection(.searchNodes, "invalid edge child")
+                }
                 let first = nodes.readUInt32(at: childOffset + 8)
                 let count = nodes.readUInt32(at: childOffset + 12)
+                guard first < root.nameCount, count <= root.nameCount - first else {
+                    throw DatabaseFormatError.invalidSection(.searchNodes, "invalid child ordinal range")
+                }
                 return RadixPrefixMatch(
                     range: first..<first + count,
                     terminal: nil
@@ -569,7 +600,15 @@ final class PackedRadixSearchIndex {
         }
     }
 
-    private func findEdge(first: Int, count: Int, firstByte: UInt8) -> Int? {
+    private func findEdge(first: Int, count: Int, firstByte: UInt8) throws -> Int? {
+        guard
+            edges.containsRange(
+                offset: first * PackedRadixIndexLayout.edgeStride,
+                length: count * PackedRadixIndexLayout.edgeStride
+            )
+        else {
+            throw DatabaseFormatError.invalidSection(.searchEdges, "invalid edge range")
+        }
         if count <= 8 {
             for index in first..<first + count {
                 let byte = edges[index * PackedRadixIndexLayout.edgeStride + 10]
@@ -613,13 +652,13 @@ final class PackedRadixSearchIndex {
         paths: inout [SearchTraversalPath],
         frontier: inout SearchFrontierHeap,
         results: inout TopKResultHeap
-    ) {
+    ) throws {
         let key =
             UInt64(scope.rawValue) << 56
             | UInt64(root.indexID) << 40
             | UInt64(area)
         guard keySet.insert(key),
-            let bucket = areaBucket(scope: scope, indexID: root.indexID, area: area)
+            let bucket = try areaBucket(scope: scope, indexID: root.indexID, area: area)
         else {
             return
         }
@@ -627,12 +666,12 @@ final class PackedRadixSearchIndex {
             onlyExact
             ? match.terminal!..<match.terminal! + 1
             : match.range
-        let lower = areaLowerBound(
+        let lower = try areaLowerBound(
             scope: scope,
             bucket: bucket,
             ordinal: desiredRange.lowerBound
         )
-        let upper = areaLowerBound(
+        let upper = try areaLowerBound(
             scope: scope,
             bucket: bucket,
             ordinal: desiredRange.upperBound
@@ -652,8 +691,9 @@ final class PackedRadixSearchIndex {
             countryFilter: countryFilter
         )
         let pathIndex = paths.count
+        if paths.isEmpty { paths.reserveCapacity(8) }
         paths.append(path)
-        addRange(
+        try addRange(
             path: path,
             pathIndex: pathIndex,
             range: lower..<upper,
@@ -672,13 +712,16 @@ final class PackedRadixSearchIndex {
         onlyExact: Bool,
         frontier: inout SearchFrontierHeap,
         results: inout TopKResultHeap
-    ) {
+    ) throws {
+        guard range.upperBound <= path.itemCount else {
+            throw DatabaseFormatError.invalidSection(.searchNameMetadata, "invalid traversal range")
+        }
         let leafSize = UInt32(PackedRadixIndexLayout.namesPerLeaf)
         let firstFull = (range.lowerBound + leafSize - 1) / leafSize
         let lastFull = range.upperBound / leafSize
         let firstBoundaryEnd = min(range.upperBound, firstFull * leafSize)
         if range.lowerBound < firstBoundaryEnd {
-            scanItems(
+            try scanItems(
                 path: path,
                 range: range.lowerBound..<firstBoundaryEnd,
                 queryCharacters: queryCharacters,
@@ -687,7 +730,7 @@ final class PackedRadixSearchIndex {
         }
         let lastBoundaryStart = max(firstBoundaryEnd, lastFull * leafSize)
         if lastBoundaryStart < range.upperBound {
-            scanItems(
+            try scanItems(
                 path: path,
                 range: lastBoundaryStart..<range.upperBound,
                 queryCharacters: queryCharacters,
@@ -701,7 +744,7 @@ final class PackedRadixSearchIndex {
         var right = path.treeLeafBase + lastFull
         while left < right {
             if left & 1 == 1 {
-                addTreeNode(
+                try addTreeNode(
                     path: path,
                     pathIndex: pathIndex,
                     node: left,
@@ -713,7 +756,7 @@ final class PackedRadixSearchIndex {
             }
             if right & 1 == 1 {
                 right -= 1
-                addTreeNode(
+                try addTreeNode(
                     path: path,
                     pathIndex: pathIndex,
                     node: right,
@@ -734,9 +777,9 @@ final class PackedRadixSearchIndex {
         queryCharacters: Int,
         onlyExact: Bool,
         frontier: inout SearchFrontierHeap
-    ) {
+    ) throws {
         let tree = treeBytes(scope: path.scope)
-        let offset = Int(path.treeStart + node) * PackedRadixIndexLayout.treeNodeStride
+        let offset = (Int(path.treeStart) + Int(node)) * PackedRadixIndexLayout.treeNodeStride
         let bound = PackedRadixIndexLayout.rankUpperBound(
             bytes: tree,
             offset: offset,
@@ -760,91 +803,89 @@ final class PackedRadixSearchIndex {
         range: Range<UInt32>,
         queryCharacters: Int,
         results: inout TopKResultHeap
-    ) {
+    ) throws {
+        let entries = path.scope == .global ? nil : entryBytes(scope: path.scope)
         for item in range {
             let ordinal: UInt32
-            if path.scope == .global {
-                ordinal = item
-            } else {
-                let entries = entryBytes(scope: path.scope)
-                let offset =
-                    Int(path.itemStart + item) * PackedRadixIndexLayout.areaEntryStride
+            let maximumRank: Float?
+            if let entries {
+                let offset = (Int(path.itemStart) + Int(item)) * PackedRadixIndexLayout.areaEntryStride
                 ordinal = entries.readUInt32(at: offset)
-                let maximumRank = PackedRadixIndexLayout.decodeRankBound(
-                    entries.readUInt16(at: offset + 4)
-                )
-                let characterCount = nameCharacterCount(root: path.root, ordinal: ordinal)
-                let boost = scoreBoost(
-                    characterCount: characterCount,
-                    queryCharacters: queryCharacters,
-                    isExact: ordinal == path.terminal
-                )
-                if results.isFull, let worst = results.worst,
-                    maximumRank + boost < worst.score
-                {
-                    continue
-                }
+                maximumRank = PackedRadixIndexLayout.decodeRankBound(entries.readUInt16(at: offset + 4))
+            } else {
+                ordinal = item
+                maximumRank = nil
             }
-            scanName(
-                path: path,
-                ordinal: ordinal,
+            guard ordinal < path.root.nameCount else {
+                throw DatabaseFormatError.invalidSection(.searchNameMetadata, "invalid name ordinal")
+            }
+            let metadataOffset = (Int(path.root.nameBase) + Int(ordinal)) * PackedRadixIndexLayout.nameMetadataStride
+            let characterCount = Int(metadata.readUInt16(at: metadataOffset + 8))
+            let boost = scoreBoost(
+                characterCount: characterCount,
                 queryCharacters: queryCharacters,
-                results: &results
+                isExact: ordinal == path.terminal
             )
+            if let maximumRank, results.isFull, let worst = results.worst,
+                maximumRank + boost < worst.score
+            {
+                continue
+            }
+            try scanName(path: path, metadataOffset: metadataOffset, boost: boost, results: &results)
         }
     }
 
     private func scanName(
         path: SearchTraversalPath,
-        ordinal: UInt32,
-        queryCharacters: Int,
+        metadataOffset: Int,
+        boost: Float,
         results: inout TopKResultHeap
-    ) {
-        let metadataOffset =
-            Int(path.root.nameBase + ordinal) * PackedRadixIndexLayout.nameMetadataStride
+    ) throws {
+        results.diagnostics?.namesExamined += 1
         let postingStart = Int(metadata.readUInt32(at: metadataOffset))
         let postingCount = Int(metadata.readUInt32(at: metadataOffset + 4))
-        let characterCount = Int(metadata.readUInt16(at: metadataOffset + 8))
-        let boost = scoreBoost(
-            characterCount: characterCount,
-            queryCharacters: queryCharacters,
-            isExact: ordinal == path.terminal
-        )
+        guard
+            postings.containsRange(
+                offset: postingStart * PackedRadixIndexLayout.postingStride,
+                length: postingCount * PackedRadixIndexLayout.postingStride
+            )
+        else {
+            throw DatabaseFormatError.invalidSection(.searchPostings, "invalid posting range")
+        }
+        let country = path.scope == .country ? UInt16(exactly: path.area) : path.countryFilter
         for postingIndex in 0..<postingCount {
+            results.diagnostics?.postingsExamined += 1
             let offset =
                 (postingStart + postingIndex) * PackedRadixIndexLayout.postingStride
             let row = postings.readUInt32(at: offset)
             let rank = Float(bitPattern: postings.readUInt32(at: offset + 4))
+            guard Int(row) < recordCount, rank.isFinite else {
+                throw DatabaseFormatError.invalidSection(.searchPostings, "invalid posting row or rank")
+            }
             let score = rank + boost
             if results.isFull, let worst = results.worst, score < worst.score {
                 break
             }
-            if let countryFilter = path.countryFilter,
-                postings.readUInt16(at: offset + 8) != countryFilter
+            if let country,
+                postings.readUInt16(at: offset + 8) != country
             {
+                results.diagnostics?.postingsRejectedByGeography += 1
                 continue
             }
-            switch path.scope {
-            case .global:
-                break
-            case .country:
-                guard UInt32(postings.readUInt16(at: offset + 8)) == path.area else {
-                    continue
-                }
-            case .admin:
-                guard postings.readUInt32(at: offset + 10) == path.area else {
-                    continue
-                }
+            if path.scope == .admin, postings.readUInt32(at: offset + 10) != path.area {
+                results.diagnostics?.postingsRejectedByGeography += 1
+                continue
             }
             let rowIndex = Int(row)
             results.insert(
                 row: row,
                 id: Int32(
                     bitPattern: rowIDs.readUInt32(
-                        at: rowIndex * MemoryLayout<UInt32>.stride
+                        at: rowIndex * LocationRecordView.stride
                     )
                 ),
-                score: score
+                score: score,
+                sources: MatchSources(rawValue: postings.readUInt16(at: offset + 14))
             )
         }
     }
@@ -854,23 +895,14 @@ final class PackedRadixSearchIndex {
         queryCharacters: Int,
         isExact: Bool
     ) -> Float {
-        if isExact {
-            return 1.5
-        }
-        return 1.5 / Float(max(0, characterCount - queryCharacters) + 1)
-    }
-
-    private func nameCharacterCount(root: RadixIndexRoot, ordinal: UInt32) -> Int {
-        let offset =
-            Int(root.nameBase + ordinal) * PackedRadixIndexLayout.nameMetadataStride + 8
-        return Int(metadata.readUInt16(at: offset))
+        SearchScorer.boost(characterCount: characterCount, queryCharacters: queryCharacters, isExact: isExact)
     }
 
     private func areaBucket(
         scope: SearchFilterScope,
         indexID: UInt16,
         area: UInt32
-    ) -> AreaOrdinalView? {
+    ) throws -> AreaOrdinalView? {
         let bytes = scope == .country ? countryBuckets : adminBuckets
         let count = scope == .country ? countryBucketCount : adminBucketCount
         var low = 0
@@ -898,7 +930,7 @@ final class PackedRadixSearchIndex {
         else {
             return nil
         }
-        return AreaOrdinalView(
+        let bucket = AreaOrdinalView(
             indexID: indexID,
             area: area,
             entryStart: bytes.readUInt32(at: offset + 8),
@@ -906,20 +938,29 @@ final class PackedRadixSearchIndex {
             treeStart: bytes.readUInt32(at: offset + 16),
             treeLeafBase: bytes.readUInt32(at: offset + 20)
         )
+        let start = Int(bucket.entryStart)
+        let items = Int(bucket.entryCount)
+        let leaves = Int(bucket.treeLeafBase)
+        guard bucket.entryCount <= 0x7fff_ffff,
+            entryBytes(scope: scope).containsRange(offset: start * 6, length: items * 6),
+            leaves > 0, leaves & (leaves - 1) == 0, leaves >= (items + 63) / 64,
+            treeBytes(scope: scope).containsRange(offset: Int(bucket.treeStart) * 24, length: leaves * 2 * 24)
+        else { throw DatabaseFormatError.invalidSection(.searchCountryBuckets, "invalid area view") }
+        return bucket
     }
 
     private func areaLowerBound(
         scope: SearchFilterScope,
         bucket: AreaOrdinalView,
         ordinal: UInt32
-    ) -> UInt32 {
+    ) throws -> UInt32 {
         let bytes = entryBytes(scope: scope)
         var low: UInt32 = 0
         var high = bucket.entryCount
         while low < high {
             let middle = low + (high - low) / 2
             let offset =
-                Int(bucket.entryStart + middle) * PackedRadixIndexLayout.areaEntryStride
+                (Int(bucket.entryStart) + Int(middle)) * PackedRadixIndexLayout.areaEntryStride
             if bytes.readUInt32(at: offset) < ordinal {
                 low = middle + 1
             } else {

@@ -35,7 +35,7 @@ enum MappedFileError: Error, CustomStringConvertible {
 final class MappedFile {
     let path: String
     let count: Int
-    private let address: UnsafeMutableRawPointer
+    private let address: UnsafeMutableRawPointer?
 
     init(url: URL) throws {
         path = url.path
@@ -50,11 +50,16 @@ final class MappedFile {
             close(descriptor)
             throw MappedFileError.stat(path: path, message: message)
         }
-        guard info.st_size > 0, let size = Int(exactly: info.st_size) else {
+        guard info.st_size >= 0, let size = Int(exactly: info.st_size) else {
             close(descriptor)
             throw MappedFileError.empty(path: path)
         }
         count = size
+        if count == 0 {
+            address = nil
+            close(descriptor)
+            return
+        }
 
         guard
             let mapping = mmap(nil, count, PROT_READ, MAP_PRIVATE, descriptor, 0),
@@ -69,7 +74,7 @@ final class MappedFile {
     }
 
     deinit {
-        _ = munmap(address, count)
+        if let address { _ = munmap(address, count) }
     }
 
     func bytes(offset: UInt64, length: UInt64) throws -> UnsafeRawBufferPointer {
@@ -82,13 +87,19 @@ final class MappedFile {
             throw MappedFileError.range(offset: offset, length: length, fileSize: count)
         }
         return UnsafeRawBufferPointer(
-            start: UnsafeRawPointer(address).advanced(by: integerOffset),
+            start: address.map { UnsafeRawPointer($0).advanced(by: integerOffset) },
             count: integerLength
         )
     }
 
     func optimizeForRandomAccess() {
-        _ = madvise(address, count, MADV_RANDOM)
+        if let address { _ = madvise(address, count, MADV_RANDOM) }
+    }
+
+    /// Release this mapping's resident pages after a verification pass. The file
+    /// and OS page cache remain intact; subsequent borrowed reads fault them back in.
+    func releaseResidentPages() {
+        if let address { _ = madvise(address, count, MADV_DONTNEED) }
     }
 
     private static func lastError() -> String {

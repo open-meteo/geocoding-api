@@ -17,7 +17,7 @@ env:
 jobs:
   linux:
     runs-on: ubuntu-22.04
-    container: swift:6.1.0-jammy
+    container: swift:6.3.3-jammy
     name: Linux
     steps:
     - name: Get Swift Version
@@ -43,3 +43,14 @@ jobs:
       run: ${{ env.swift_build }}
     - name: Test
       run: ${{ env.swift_test }}
+    - name: Release tests
+      run: swift test -c release
+
+  address-sanitizer:
+    runs-on: ubuntu-22.04
+    container: swift:6.3.3-jammy
+    steps:
+    - uses: actions/checkout@v7
+    - run: swift test --sanitize address --filter 'FormatTests|GeocodingDatabaseTests'
+      env:
+        ASAN_OPTIONS: detect_leaks=0

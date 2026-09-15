@@ -1,11 +1,11 @@
-// swift-tools-version:6.2
+// swift-tools-version:6.3
 
 import PackageDescription
 
 let package = Package(
     name: "GeocodingApi",
     platforms: [
-        .macOS(.v10_15)
+        .macOS(.v26)
     ],
     dependencies: [
         .package(url: "https://github.com/vapor/vapor.git", from: "4.0.0"),
@@ -21,7 +21,7 @@ let package = Package(
             exclude: ["ProtoResources/"],
             swiftSettings: [
                 .enableExperimentalFeature("Lifetimes"),
-                .unsafeFlags(["-cross-module-optimization"], .when(configuration: .release))
+                .unsafeFlags(["-cross-module-optimization"], .when(configuration: .release)),
             ],
         ),
         .executableTarget(name: "Run", dependencies: [.target(name: "App")]),

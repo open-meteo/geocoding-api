@@ -33,13 +33,14 @@ struct AdministrativeAreaResolver: Sendable {
         _ value: String,
         languageID: UInt16,
         countryCode: String?
-    ) -> Resolution {
+    ) throws -> Resolution {
+        defer { withExtendedLifetime(database) {} }
         let normalized = Self.normalize(value)
         let countryFilter = countryCode.flatMap(GeocodingDatabase.countryValue)
         if countryCode != nil, countryFilter == nil {
             return Resolution()
         }
-        if let result = lookup(
+        if let result = try lookup(
             kind: .abbreviation,
             languageID: 0,
             normalized: normalized,
@@ -48,13 +49,13 @@ struct AdministrativeAreaResolver: Sendable {
             return result
         }
         var result =
-            lookup(
+            try lookup(
                 kind: .common,
                 languageID: 0,
                 normalized: normalized,
                 countryFilter: countryFilter
             ) ?? Resolution()
-        if let localized = lookup(
+        if let localized = try lookup(
             kind: .localized,
             languageID: languageID,
             normalized: normalized,
@@ -71,13 +72,13 @@ struct AdministrativeAreaResolver: Sendable {
         languageID: UInt16,
         normalized: String,
         countryFilter: UInt16?
-    ) -> Resolution? {
-        func find(_ query: borrowing Span<UInt8>) -> Int? {
+    ) throws -> Resolution? {
+        func find(_ query: borrowing Span<UInt8>) throws -> Int? {
             var low = 0
             var high = recordCount
             while low < high {
                 let middle = low + (high - low) / 2
-                let comparison = compareRecord(
+                let comparison = try compareRecord(
                     at: middle,
                     kind: kind,
                     languageID: languageID,
@@ -91,7 +92,7 @@ struct AdministrativeAreaResolver: Sendable {
             }
             guard
                 low < recordCount,
-                compareRecord(
+                try compareRecord(
                     at: low,
                     kind: kind,
                     languageID: languageID,
@@ -104,14 +105,14 @@ struct AdministrativeAreaResolver: Sendable {
         }
 
         let record: Int?
-        if let found = normalized.utf8.withContiguousStorageIfAvailable({
-            find(Span(_unsafeElements: $0))
+        if let found = try normalized.utf8.withContiguousStorageIfAvailable({
+            try find(Span(_unsafeElements: $0))
         }) {
             record = found
         } else {
             let copy = Array(normalized.utf8)
-            record = copy.withUnsafeBufferPointer {
-                find(Span(_unsafeElements: $0))
+            record = try copy.withUnsafeBufferPointer {
+                try find(Span(_unsafeElements: $0))
             }
         }
         guard let record else {
@@ -123,6 +124,14 @@ struct AdministrativeAreaResolver: Sendable {
         let offset = record * AdministrativeAliasIndexLayout.recordStride
         let start = Int(records.readUInt32(at: offset + 8))
         let count = Int(records.readUInt16(at: offset + 12))
+        guard
+            candidates.containsRange(
+                offset: start * AdministrativeAliasIndexLayout.candidateStride,
+                length: count * AdministrativeAliasIndexLayout.candidateStride
+            )
+        else {
+            throw DatabaseFormatError.invalidSection(.administrativeAliasCandidates, "invalid alias candidate range")
+        }
         var result = Resolution()
         for index in start..<start + count {
             let candidateOffset =
@@ -148,7 +157,7 @@ struct AdministrativeAreaResolver: Sendable {
         kind: AdministrativeAliasKind,
         languageID: UInt16,
         query: borrowing Span<UInt8>
-    ) -> Int {
+    ) throws -> Int {
         let records = database.rawSection(.administrativeAliasRecords)
         let strings = database.rawSection(.administrativeAliasStrings)
         let offset = index * AdministrativeAliasIndexLayout.recordStride
@@ -161,7 +170,13 @@ struct AdministrativeAreaResolver: Sendable {
             return candidateLanguage < languageID ? -1 : 1
         }
         let stringOffset = Int(records.readUInt32(at: offset + 4))
+        guard strings.containsRange(offset: stringOffset, length: 4) else {
+            throw DatabaseFormatError.invalidSection(.administrativeAliasStrings, "invalid alias offset")
+        }
         let length = Int(strings.readUInt32(at: stringOffset))
+        guard strings.containsRange(offset: stringOffset + 4, length: length) else {
+            throw DatabaseFormatError.invalidSection(.administrativeAliasStrings, "invalid alias string range")
+        }
         let candidate = UnsafeRawBufferPointer(
             rebasing: strings[
                 stringOffset + 4..<stringOffset + 4 + length

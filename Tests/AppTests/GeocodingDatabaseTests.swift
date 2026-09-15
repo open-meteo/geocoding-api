@@ -39,44 +39,44 @@ final class GeocodingDatabaseTests: XCTestCase {
         XCTAssertEqual(response.postcodes, ["1234"])
         XCTAssertEqual(response.timezone, "Europe/Zurich")
 
-        let exact = database.searchIndex.search(
+        let exact = try database.searchIndex.search(
             "Springfield",
             languageID: english,
             count: 10,
             countryCode: nil,
             administrativeArea: nil
         )
-        XCTAssertEqual(exact.map(\.0), [120, 220, 121])
-        XCTAssertGreaterThan(exact[0].1, exact[1].1)
+        XCTAssertEqual(exact.map(\.id), [120, 220, 121])
+        XCTAssertGreaterThan(exact[0].score, exact[1].score)
 
-        let prefix = database.searchIndex.search(
+        let prefix = try database.searchIndex.search(
             "Spring",
             languageID: english,
             count: 10,
             countryCode: "TL",
             administrativeArea: nil
         )
-        XCTAssertEqual(prefix.map(\.0), [120, 121])
+        XCTAssertEqual(prefix.map(\.id), [120, 121])
 
-        let germanSearch = database.searchIndex.search(
+        let germanSearch = try database.searchIndex.search(
             "Fruhl",
             languageID: german,
             count: 10,
             countryCode: nil,
             administrativeArea: nil
         )
-        XCTAssertEqual(germanSearch.map(\.0), [120])
+        XCTAssertEqual(germanSearch.map(\.id), [120])
 
-        let postcode = database.searchIndex.search(
+        let postcode = try database.searchIndex.search(
             "1234",
             languageID: english,
             count: 10,
             countryCode: nil,
             administrativeArea: nil
         )
-        XCTAssertEqual(postcode.map(\.0), [120])
+        XCTAssertEqual(postcode.map(\.id), [120])
 
-        let historic = database.searchIndex.search(
+        let historic = try database.searchIndex.search(
             "Old Springfield",
             languageID: english,
             count: 10,
@@ -86,26 +86,26 @@ final class GeocodingDatabaseTests: XCTestCase {
         XCTAssertTrue(historic.isEmpty)
 
         let lookup = AdministrativeAreaResolver(database: database)
-        let area = lookup.resolve("NR", languageID: english, countryCode: "TL")
-        let filtered = database.searchIndex.search(
+        let area = try lookup.resolve("NR", languageID: english, countryCode: "TL")
+        let filtered = try database.searchIndex.search(
             "Spring",
             languageID: english,
             count: 10,
             countryCode: nil,
             administrativeArea: area
         )
-        XCTAssertEqual(filtered.map(\.0), [120, 121])
+        XCTAssertEqual(filtered.map(\.id), [120, 121])
 
-        let filteredByCountryAndArea = database.searchIndex.search(
+        let filteredByCountryAndArea = try database.searchIndex.search(
             "Spring",
             languageID: english,
             count: 10,
             countryCode: "TL",
             administrativeArea: area
         )
-        XCTAssertEqual(filteredByCountryAndArea.map(\.0), [120, 121])
+        XCTAssertEqual(filteredByCountryAndArea.map(\.id), [120, 121])
 
-        let excludedByCountry = database.searchIndex.search(
+        let excludedByCountry = try database.searchIndex.search(
             "Spring",
             languageID: english,
             count: 10,
@@ -130,17 +130,17 @@ final class GeocodingDatabaseTests: XCTestCase {
         let french = try XCTUnwrap(database.languageIDs["fr"])
 
         XCTAssertEqual(
-            resolver.resolve("NR", languageID: english, countryCode: nil).admin1IDs,
+            try resolver.resolve("NR", languageID: english, countryCode: nil).admin1IDs,
             [110]
         )
         XCTAssertTrue(
-            resolver.resolve("NR", languageID: english, countryCode: "OL").isEmpty
+            try resolver.resolve("NR", languageID: english, countryCode: "OL").isEmpty
         )
         XCTAssertEqual(
-            resolver.resolve("TL", languageID: english, countryCode: nil).admin1IDs,
+            try resolver.resolve("TL", languageID: english, countryCode: nil).admin1IDs,
             [210]
         )
-        let countryCodeCollision = resolver.resolve(
+        let countryCodeCollision = try resolver.resolve(
             "TL",
             languageID: english,
             countryCode: "TL"
@@ -148,7 +148,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         XCTAssertTrue(countryCodeCollision.admin1IDs.isEmpty)
         XCTAssertEqual(countryCodeCollision.countryCodes, ["TL"])
         XCTAssertEqual(
-            resolver.resolve(
+            try resolver.resolve(
                 "Shared Region",
                 languageID: english,
                 countryCode: nil
@@ -156,7 +156,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             [110, 210]
         )
         XCTAssertEqual(
-            resolver.resolve(
+            try resolver.resolve(
                 "Shared Region",
                 languageID: english,
                 countryCode: "TL"
@@ -164,7 +164,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             [110]
         )
         XCTAssertEqual(
-            resolver.resolve(
+            try resolver.resolve(
                 "Région commune",
                 languageID: french,
                 countryCode: nil
@@ -172,7 +172,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             [110, 210]
         )
         XCTAssertEqual(
-            resolver.resolve(
+            try resolver.resolve(
                 "Republic of Testland",
                 languageID: german,
                 countryCode: nil
@@ -180,7 +180,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             ["TL"]
         )
         XCTAssertEqual(
-            resolver.resolve("tl", languageID: english, countryCode: " tl ").countryCodes,
+            try resolver.resolve("tl", languageID: english, countryCode: " tl ").countryCodes,
             ["TL"]
         )
     }
@@ -222,7 +222,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         let database = try GeocodingDatabase(url: paths.databaseFile)
         let resolver = AdministrativeAreaResolver(database: database)
         for (offset, feature) in featureCodes.enumerated() {
-            let resolution = resolver.resolve(
+            let resolution = try resolver.resolve(
                 "\(feature) Territory",
                 languageID: 0,
                 countryCode: countryCodes[offset].lowercased()
@@ -246,51 +246,51 @@ final class GeocodingDatabaseTests: XCTestCase {
 
         // Ends inside a compressed edge.
         XCTAssertEqual(
-            database.searchIndex.search(
+            try database.searchIndex.search(
                 "Spr",
                 languageID: english,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.0),
+            ).map(\.id),
             [120, 220, 121]
         )
 
         // Ends at an internal terminal and then below that terminal.
         XCTAssertEqual(
-            database.searchIndex.search(
+            try database.searchIndex.search(
                 "Springfield",
                 languageID: english,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.0),
+            ).map(\.id),
             [120, 220, 121]
         )
         XCTAssertEqual(
-            database.searchIndex.search(
+            try database.searchIndex.search(
                 "Springfield G",
                 languageID: english,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.0),
+            ).map(\.id),
             [121]
         )
 
         // A complete terminal leaf and a query extending beyond it.
         XCTAssertEqual(
-            database.searchIndex.search(
+            try database.searchIndex.search(
                 "Frühlingsfeld",
                 languageID: german,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.0),
+            ).map(\.id),
             [120]
         )
         XCTAssertTrue(
-            database.searchIndex.search(
+            try database.searchIndex.search(
                 "Frühlingsfelder",
                 languageID: german,
                 count: 10,
@@ -301,7 +301,7 @@ final class GeocodingDatabaseTests: XCTestCase {
 
         // One- and two-character queries retain exact-only behavior.
         XCTAssertTrue(
-            database.searchIndex.search(
+            try database.searchIndex.search(
                 "Sp",
                 languageID: english,
                 count: 10,

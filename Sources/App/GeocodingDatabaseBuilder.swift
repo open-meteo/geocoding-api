@@ -20,7 +20,7 @@ struct DatabaseBuildPaths {
     static let `default` = DatabaseBuildPaths(
         geonamesFile: URL(fileURLWithPath: "data/allCountries.txt"),
         alternateNamesFile: URL(fileURLWithPath: "data/alternateNamesV2.txt"),
-        databaseFile: URL(fileURLWithPath: "data/database-v2.bin")
+        databaseFile: URL(fileURLWithPath: "data/database-v3.bin")
     )
 }
 
@@ -36,21 +36,16 @@ struct DatabaseSectionArtifact {
 
 private struct GeoNamesScanSummary {
     var includedIDs = DynamicBitSet()
+    var idToRow = [UInt32]()
+
+    var managedBytes: Int {
+        (Int(maximumID) + 1) * 4 + Int(recordCount) * 12 + (Int(maximumID) + 8) / 8 + (32 << 20)
+    }
     var recordCount: UInt32 = 0
     var maximumID: UInt32 = 0
     var countries = [UInt16: Int32]()
     var administrativeCodes = AdminCodeLookup()
     var fingerprint: UInt64 = 0
-}
-
-private struct PartitionNameSlice {
-    let offset: Int
-    let length: Int
-}
-
-private struct PreferredAlternate {
-    let preference: UInt8
-    let name: PartitionNameSlice
 }
 
 private struct AlternateNamesBuildResult {
@@ -61,18 +56,6 @@ private struct AlternateNamesBuildResult {
     let postcodeCounts: [UInt16]
     let artifacts: [DatabaseSectionArtifact]
     let fingerprint: UInt64
-}
-
-private struct SearchCandidatePartitions {
-    let urls: [URL]
-    let writers: [BufferedBinaryWriter]
-    let mask: UInt32
-
-    func writer(indexID: UInt16, country: UInt16) -> BufferedBinaryWriter {
-        var hash = UInt32(indexID) &* 2_654_435_761
-        hash ^= UInt32(country) &* 2_246_822_519
-        return writers[Int(hash & mask)]
-    }
 }
 
 private struct AdministrativeAliasBuildKey: Hashable {
@@ -121,6 +104,12 @@ final class GeocodingDatabaseBuilder {
     }
 
     func build() async throws {
+        if fileManager.fileExists(atPath: paths.databaseFile.path), !options.force {
+            throw DatabaseBuildIOError.write(
+                path: paths.databaseFile.path,
+                message: "Database already exists; pass --force to replace it"
+            )
+        }
         let started = Date()
         logger.info("Geocoding database: scan GeoNames metadata")
         let initial = try scanGeonames()
@@ -128,6 +117,9 @@ final class GeocodingDatabaseBuilder {
             "Geocoding database: selected \(initial.recordCount) records; maximum ID \(initial.maximumID)"
         )
 
+        logger.info(
+            "Geocoding database: reserved managed memory \(initial.managedBytes >> 20) MiB; sort workspace \((options.memoryLimitBytes - initial.managedBytes) >> 20) MiB"
+        )
         logger.info("Geocoding database: partition and reduce alternate names")
         let alternate = try buildAlternateNames(initial: initial)
 
@@ -137,11 +129,11 @@ final class GeocodingDatabaseBuilder {
         let records = try buildRecords(initial: initial, alternate: alternate)
 
         logger.info("Geocoding database: build packed search index")
-        let searchArtifacts = try await PackedRadixIndexBuilder(
+        let searchArtifacts = try PackedRadixIndexBuilder(
             logger: logger,
             workspace: workspace,
-            sourcePartitions: records.searchPartitions,
-            memoryLimitBytes: options.memoryLimitBytes
+            source: records.searchCandidates,
+            memoryLimitBytes: options.memoryLimitBytes - initial.managedBytes
         ).build()
 
         var artifacts = alternate.artifacts
@@ -166,7 +158,7 @@ final class GeocodingDatabaseBuilder {
             )
         )
 
-        let output = workspace.appendingPathComponent("database-v2.bin.tmp")
+        let output = workspace.appendingPathComponent("database-v3.bin.tmp")
         try writeContainer(
             output: output,
             artifacts: artifacts,
@@ -186,6 +178,7 @@ final class GeocodingDatabaseBuilder {
 
     private func scanGeonames() throws -> GeoNamesScanSummary {
         var result = GeoNamesScanSummary()
+        var ids = [UInt32]()
         var hasher = XXHash64()
         let reader = try BufferedLineReader(url: paths.geonamesFile)
         var lineNumber = 0
@@ -228,6 +221,20 @@ final class GeocodingDatabaseBuilder {
             guard GeoNamesRecordRules.includes(feature) else {
                 return
             }
+            guard !result.includedIDs.contains(unsignedID) else {
+                throw DatabaseFormatError.invalidHeader("duplicate GeoNames ID")
+            }
+            let denseBytes = (Int(max(result.maximumID, unsignedID)) + 1) * 4
+            let rowBytes = (Int(result.recordCount) + 1) * 16
+            let minimum = denseBytes + rowBytes + (Int(unsignedID) + 8) / 8 + 41_943_040
+            guard minimum <= options.memoryLimitBytes else {
+                throw DatabaseBuildIOError.write(
+                    path: paths.databaseFile.path,
+                    message:
+                        "Memory budget is too small; at least \((minimum + (1 << 20) - 1) >> 20) MiB required for records and an 8 MiB sort workspace"
+                )
+            }
+            ids.append(unsignedID)
             result.includedIDs.insert(unsignedID)
             result.recordCount += 1
             result.maximumID = max(result.maximumID, unsignedID)
@@ -279,23 +286,15 @@ final class GeocodingDatabaseBuilder {
                 result.countries[country] = id
             }
         }
+        result.idToRow = [UInt32](repeating: UInt32.max, count: Int(result.maximumID) + 1)
+        for (row, id) in ids.enumerated() { result.idToRow[Int(id)] = UInt32(row) }
         result.fingerprint = hasher.digest()
         return result
     }
 
     private func buildAlternateNames(initial: GeoNamesScanSummary) throws -> AlternateNamesBuildResult {
-        let partitionCount = try alternatePartitionCount()
-        let partitionMask = UInt32(partitionCount - 1)
-        var partitionWriters = [BufferedBinaryWriter]()
-        var partitionURLs = [URL]()
-        partitionWriters.reserveCapacity(partitionCount)
-        partitionURLs.reserveCapacity(partitionCount)
-        for index in 0..<partitionCount {
-            let url = workspace.appendingPathComponent("alternate-\(index).part")
-            partitionURLs.append(url)
-            partitionWriters.append(try BufferedBinaryWriter(url: url))
-        }
-
+        let unsorted = workspace.appendingPathComponent("alternate-input.tmp")
+        let inputWriter = try BufferedBinaryWriter(url: unsorted)
         let languages = ByteStringInterner()
         var fingerprintHasher = XXHash64()
         let reader = try BufferedLineReader(url: paths.alternateNamesFile)
@@ -374,23 +373,40 @@ final class GeocodingDatabaseBuilder {
             } else {
                 preference = 1
             }
-            let writer = partitionWriters[Int(id & partitionMask)]
-            try writer.write(id)
+            let writer = inputWriter
+            try writer.write(initial.idToRow[Int(id)])
             try writer.write(languageID)
             try writer.write(isPostcode ? UInt8(1) : UInt8(0))
             try writer.write(preference)
             try writer.write(UInt32(name.count))
+            try writer.write(UInt64(lineNumber))
             try writer.write(name)
         }
-        for writer in partitionWriters {
-            _ = try writer.close()
+        _ = try inputWriter.close()
+        let sorted = try ExternalSort.sort(
+            inputs: [unsorted],
+            workspace: workspace,
+            label: "alternate",
+            headerSize: 20,
+            lengthOffset: 8,
+            memoryBytes: options.memoryLimitBytes - initial.managedBytes
+        ) { lhs, rhs in
+            if lhs.readUInt32(at: 0) != rhs.readUInt32(at: 0) { return lhs.readUInt32(at: 0) < rhs.readUInt32(at: 0) }
+            if lhs[6] != rhs[6] { return lhs[6] < rhs[6] }
+            if lhs[6] == 0 {
+                if lhs.readUInt16(at: 4) != rhs.readUInt16(at: 4) {
+                    return lhs.readUInt16(at: 4) < rhs.readUInt16(at: 4)
+                }
+                if lhs[7] != rhs[7] { return lhs[7] > rhs[7] }
+            }
+            return lhs.readUInt64(at: 12) < rhs.readUInt64(at: 12)
         }
-
-        let denseCount = Int(initial.maximumID) + 1
-        var alternateStarts = [UInt32](repeating: 0, count: denseCount)
-        var alternateCounts = [UInt16](repeating: 0, count: denseCount)
-        var postcodeStarts = [UInt32](repeating: 0, count: denseCount)
-        var postcodeCounts = [UInt16](repeating: 0, count: denseCount)
+        try fileManager.removeItem(at: unsorted)
+        let rows = Int(initial.recordCount)
+        var alternateStarts = [UInt32](repeating: 0, count: rows)
+        var alternateCounts = [UInt16](repeating: 0, count: rows)
+        var postcodeStarts = [UInt32](repeating: 0, count: rows)
+        var postcodeCounts = [UInt16](repeating: 0, count: rows)
 
         let alternateRecordsURL = workspace.appendingPathComponent("alternate-records.section")
         let alternateStringsURL = workspace.appendingPathComponent("alternate-strings.section")
@@ -403,122 +419,40 @@ final class GeocodingDatabaseBuilder {
         var alternateRecordCount: UInt32 = 0
         var postcodeRecordCount: UInt32 = 0
 
-        for (index, url) in partitionURLs.enumerated() {
-            let attributes = try fileManager.attributesOfItem(atPath: url.path)
-            if (attributes[.size] as? NSNumber)?.uint64Value == 0 {
-                try fileManager.removeItem(at: url)
-                continue
+        let sortedReader = try BinaryRecordReader(url: sorted, headerSize: 20, lengthOffset: 8)
+        var previousAlternate: UInt64?
+        while let record = try sortedReader.next() {
+            try record.withUnsafeBytes { bytes in
+                let row = Int(bytes.readUInt32(at: 0))
+                let language = bytes.readUInt16(at: 4)
+                let key = UInt64(row) << 16 | UInt64(language)
+                if bytes[6] == 0 {
+                    guard previousAlternate != key else { return }
+                    previousAlternate = key
+                    guard alternateCounts[row] < UInt16.max else {
+                        throw GeoNamesImportError.tooManyValues("alternate names")
+                    }
+                    if alternateCounts[row] == 0 { alternateStarts[row] = alternateRecordCount }
+                    alternateCounts[row] += 1
+                    let offset = try alternateStrings.currentUInt32Offset()
+                    try alternateStrings.write(UInt32(bytes.count - 20))
+                    try alternateStrings.write(UnsafeRawBufferPointer(rebasing: bytes[20...]))
+                    try alternateRecords.write(language)
+                    try alternateRecords.write(offset)
+                    alternateRecordCount += 1
+                } else {
+                    guard postcodeCounts[row] < UInt16.max else { throw GeoNamesImportError.tooManyValues("postcodes") }
+                    if postcodeCounts[row] == 0 { postcodeStarts[row] = postcodeRecordCount }
+                    postcodeCounts[row] += 1
+                    let offset = try postcodeStrings.currentUInt32Offset()
+                    try postcodeStrings.write(UInt32(bytes.count - 20))
+                    try postcodeStrings.write(UnsafeRawBufferPointer(rebasing: bytes[20...]))
+                    try postcodeOffsets.write(offset)
+                    postcodeRecordCount += 1
+                }
             }
-            logger.info(
-                "Alternate names: reduce partition \(index + 1)/\(partitionCount)"
-            )
-            try {
-                let mapped = try MappedFile(url: url)
-                let bytes = try mapped.bytes(offset: 0, length: UInt64(mapped.count))
-                var preferredByKey = [UInt64: PreferredAlternate]()
-                var postcodesByID = [UInt32: [PartitionNameSlice]]()
-                var offset = 0
-                while offset < bytes.count {
-                    guard offset + 12 <= bytes.count else {
-                        throw DatabaseBuildIOError.read(
-                            path: url.path,
-                            message: "truncated alternate partition record"
-                        )
-                    }
-                    let id = bytes.readUInt32(at: offset)
-                    let languageID = bytes.readUInt16(at: offset + 4)
-                    let kind = bytes[offset + 6]
-                    let preference = bytes[offset + 7]
-                    let nameLength = Int(bytes.readUInt32(at: offset + 8))
-                    let nameOffset = offset + 12
-                    guard nameLength <= bytes.count - nameOffset else {
-                        throw DatabaseBuildIOError.read(
-                            path: url.path,
-                            message: "alternate partition string exceeds file"
-                        )
-                    }
-                    let slice = PartitionNameSlice(
-                        offset: nameOffset,
-                        length: nameLength
-                    )
-                    if kind == 1 {
-                        postcodesByID[id, default: []].append(slice)
-                    } else {
-                        let key = UInt64(id) << 16 | UInt64(languageID)
-                        if preferredByKey[key] == nil
-                            || preferredByKey[key]!.preference < preference
-                        {
-                            preferredByKey[key] = PreferredAlternate(
-                                preference: preference,
-                                name: slice
-                            )
-                        }
-                    }
-                    offset = nameOffset + nameLength
-                }
-
-                let sortedKeys = preferredByKey.keys.sorted()
-                var keyOffset = 0
-                while keyOffset < sortedKeys.count {
-                    let id = UInt32(sortedKeys[keyOffset] >> 16)
-                    let start = alternateRecordCount
-                    var cursor = keyOffset
-                    while cursor < sortedKeys.count,
-                        UInt32(sortedKeys[cursor] >> 16) == id
-                    {
-                        let key = sortedKeys[cursor]
-                        let languageID = UInt16(truncatingIfNeeded: key)
-                        let candidate = preferredByKey[key]!
-                        let stringOffset = try alternateStrings.currentUInt32Offset()
-                        try alternateStrings.write(UInt32(candidate.name.length))
-                        let nameEnd = candidate.name.offset + candidate.name.length
-                        try alternateStrings.write(
-                            UnsafeRawBufferPointer(
-                                rebasing: bytes[candidate.name.offset..<nameEnd]
-                            )
-                        )
-                        try alternateRecords.write(languageID)
-                        try alternateRecords.write(stringOffset)
-                        alternateRecordCount += 1
-                        cursor += 1
-                    }
-                    let count = cursor - keyOffset
-                    guard let compactCount = UInt16(exactly: count) else {
-                        throw GeoNamesImportError.tooManyValues(
-                            "alternate names for geoname \(id)"
-                        )
-                    }
-                    alternateStarts[Int(id)] = start
-                    alternateCounts[Int(id)] = compactCount
-                    keyOffset = cursor
-                }
-
-                for id in postcodesByID.keys.sorted() {
-                    let values = postcodesByID[id]!
-                    guard let compactCount = UInt16(exactly: values.count) else {
-                        throw GeoNamesImportError.tooManyValues(
-                            "postcodes for geoname \(id)"
-                        )
-                    }
-                    postcodeStarts[Int(id)] = postcodeRecordCount
-                    postcodeCounts[Int(id)] = compactCount
-                    for value in values {
-                        let stringOffset = try postcodeStrings.currentUInt32Offset()
-                        try postcodeStrings.write(UInt32(value.length))
-                        try postcodeStrings.write(
-                            UnsafeRawBufferPointer(
-                                rebasing: bytes[
-                                    value.offset..<value.offset + value.length
-                                ]
-                            )
-                        )
-                        try postcodeOffsets.write(stringOffset)
-                        postcodeRecordCount += 1
-                    }
-                }
-            }()
-            try fileManager.removeItem(at: url)
         }
+        try fileManager.removeItem(at: sorted)
 
         let alternateRecordsResult = try alternateRecords.close()
         let alternateStringsResult = try alternateStrings.close()
@@ -572,34 +506,18 @@ final class GeocodingDatabaseBuilder {
     private struct RecordBuildOutput {
         let artifacts: [DatabaseSectionArtifact]
         let timezones: ByteStringInterner
-        let searchPartitions: [URL]
+        let searchCandidates: URL
     }
 
     private func buildRecords(
         initial: GeoNamesScanSummary,
         alternate: AlternateNamesBuildResult
     ) throws -> RecordBuildOutput {
-        let columnDefinitions: [(DatabaseSectionKind, UInt32)] = [
-            (.rowToID, 4), (.latitude, 4), (.longitude, 4), (.ranking, 4),
-            (.elevation, 2), (.feature, 1), (.countryISO2, 2), (.countryID, 4),
-            (.admin1ID, 4), (.admin2ID, 4), (.admin3ID, 4), (.admin4ID, 4),
-            (.timezoneIndex, 2), (.population, 4), (.nameOffset, 4),
-            (.alternateStart, 4), (.alternateCount, 2), (.postcodeStart, 4),
-            (.postcodeCount, 2),
-        ]
-        var columnWriters = [DatabaseSectionKind: BufferedBinaryWriter]()
-        for (kind, _) in columnDefinitions {
-            columnWriters[kind] = try BufferedBinaryWriter(
-                url: workspace.appendingPathComponent("\(kind).section")
-            )
-        }
+        let locationWriter = try BufferedBinaryWriter(url: workspace.appendingPathComponent("locations.section"))
         let canonicalStringsURL = workspace.appendingPathComponent("canonical-strings.section")
         let canonicalStrings = try BufferedBinaryWriter(url: canonicalStringsURL)
         let timezones = ByteStringInterner()
-        var idToRow = [UInt32](
-            repeating: UInt32.max,
-            count: Int(initial.maximumID) + 1
-        )
+        let idToRow = initial.idToRow
 
         let alternateRecordsArtifact = alternate.artifacts.first {
             $0.kind == .alternateRecords
@@ -617,6 +535,9 @@ final class GeocodingDatabaseBuilder {
         let alternateStringsMap = try MappedFile(url: alternateStringsArtifact.url)
         let postcodeOffsetsMap = try MappedFile(url: postcodeOffsetsArtifact.url)
         let postcodeStringsMap = try MappedFile(url: postcodeStringsArtifact.url)
+        defer {
+            withExtendedLifetime((alternateRecordsMap, alternateStringsMap, postcodeOffsetsMap, postcodeStringsMap)) {}
+        }
         let alternateRecordBytes = try alternateRecordsMap.bytes(
             offset: 0,
             length: UInt64(alternateRecordsMap.count)
@@ -634,19 +555,7 @@ final class GeocodingDatabaseBuilder {
             length: UInt64(postcodeStringsMap.count)
         )
 
-        let searchPartitionCount = 32
-        var searchWriters = [BufferedBinaryWriter]()
-        var searchURLs = [URL]()
-        for index in 0..<searchPartitionCount {
-            let url = workspace.appendingPathComponent("search-\(index).part")
-            searchURLs.append(url)
-            searchWriters.append(try BufferedBinaryWriter(url: url))
-        }
-        let searchPartitions = SearchCandidatePartitions(
-            urls: searchURLs,
-            writers: searchWriters,
-            mask: UInt32(searchPartitionCount - 1)
-        )
+        let searchWriter = try BufferedBinaryWriter(url: workspace.appendingPathComponent("search-candidates.input"))
         let emptyLanguage = alternate.languages.firstIndex(of: "")
         let iataLanguage = alternate.languages.firstIndex(of: "iata")
         let icaoLanguage = alternate.languages.firstIndex(of: "icao")
@@ -825,10 +734,10 @@ final class GeocodingDatabaseBuilder {
                 code3: admin3,
                 code4: admin4
             )
-            let alternateStart = alternate.alternateStarts[Int(id)]
-            let alternateCount = alternate.alternateCounts[Int(id)]
-            let postcodeStart = alternate.postcodeStarts[Int(id)]
-            let postcodeCount = alternate.postcodeCounts[Int(id)]
+            let alternateStart = alternate.alternateStarts[Int(row)]
+            let alternateCount = alternate.alternateCounts[Int(row)]
+            let postcodeStart = alternate.postcodeStarts[Int(row)]
+            let postcodeCount = alternate.postcodeCounts[Int(row)]
             let rank = GeoNamesRecordRules.ranking(
                 population: population,
                 feature: feature,
@@ -838,33 +747,34 @@ final class GeocodingDatabaseBuilder {
             try canonicalStrings.write(UInt32(name.count))
             try canonicalStrings.write(name)
 
-            idToRow[Int(id)] = row
-            try columnWriters[.rowToID]!.write(id)
-            try columnWriters[.latitude]!.write(latitude)
-            try columnWriters[.longitude]!.write(longitude)
-            try columnWriters[.ranking]!.write(rank)
-            try columnWriters[.elevation]!.write(elevation)
-            try columnWriters[.feature]!.write(featureIndex)
-            try columnWriters[.countryISO2]!.write(country)
-            try columnWriters[.countryID]!.write(
-                initial.countries[country] ?? 0
-            )
-            try columnWriters[.admin1ID]!.write(admin1ID)
-            try columnWriters[.admin2ID]!.write(admin2ID)
-            try columnWriters[.admin3ID]!.write(admin3ID)
-            try columnWriters[.admin4ID]!.write(admin4ID)
-            try columnWriters[.timezoneIndex]!.write(timezone)
-            try columnWriters[.population]!.write(population)
-            try columnWriters[.nameOffset]!.write(nameOffset)
-            try columnWriters[.alternateStart]!.write(alternateStart)
-            try columnWriters[.alternateCount]!.write(alternateCount)
-            try columnWriters[.postcodeStart]!.write(postcodeStart)
-            try columnWriters[.postcodeCount]!.write(postcodeCount)
+            guard idToRow[Int(id)] == row else {
+                throw DatabaseFormatError.invalidSection(.locations, "source IDs changed between passes")
+            }
+            try locationWriter.write(id)
+            try locationWriter.write(latitude)
+            try locationWriter.write(longitude)
+            try locationWriter.write(population)
+            try locationWriter.write(initial.countries[country] ?? 0)
+            try locationWriter.write(admin1ID)
+            try locationWriter.write(admin2ID)
+            try locationWriter.write(admin3ID)
+            try locationWriter.write(admin4ID)
+            try locationWriter.write(nameOffset)
+            try locationWriter.write(alternateStart)
+            try locationWriter.write(postcodeStart)
+            try locationWriter.write(elevation)
+            try locationWriter.write(timezone)
+            try locationWriter.write(country)
+            try locationWriter.write(alternateCount)
+            try locationWriter.write(postcodeCount)
+            try locationWriter.write(featureIndex)
+            try locationWriter.write(UInt8(0))
+            try locationWriter.write(UInt32(0))
 
             let isCountry = GeoNamesRecordRules.isCountry(
                 featureIndex: featureIndex
             )
-            if (feature.equalsASCII("ADM1") || isCountry), country != 0 {
+            if feature.equalsASCII("ADM1") || isCountry, country != 0 {
                 let aliasCandidate = AdministrativeAliasBuildCandidate(
                     admin1ID: isCountry ? 0 : id,
                     country: country
@@ -923,7 +833,8 @@ final class GeocodingDatabaseBuilder {
                     admin1ID: admin1ID,
                     row: row,
                     ranking: rank,
-                    partitions: searchPartitions
+                    sources: .canonical,
+                    writer: searchWriter
                 )
                 for alternateIndex in 0..<Int(alternateCount) {
                     let record = (Int(alternateStart) + alternateIndex) * 6
@@ -945,7 +856,9 @@ final class GeocodingDatabaseBuilder {
                             admin1ID: admin1ID,
                             row: row,
                             ranking: rank,
-                            partitions: searchPartitions
+                            sources: languageID == iataLanguage || languageID == icaoLanguage
+                                ? .airportCode : .localizedAlternate,
+                            writer: searchWriter
                         )
                     }
                     if languageID == emptyLanguage
@@ -959,7 +872,8 @@ final class GeocodingDatabaseBuilder {
                             admin1ID: admin1ID,
                             row: row,
                             ranking: rank,
-                            partitions: searchPartitions
+                            sources: languageID == emptyLanguage ? .commonAlternate : .airportCode,
+                            writer: searchWriter
                         )
                     }
                 }
@@ -978,7 +892,8 @@ final class GeocodingDatabaseBuilder {
                         admin1ID: admin1ID,
                         row: row,
                         ranking: rank,
-                        partitions: searchPartitions
+                        sources: .postcode,
+                        writer: searchWriter
                     )
                 }
             }
@@ -990,21 +905,21 @@ final class GeocodingDatabaseBuilder {
             )
         }
 
-        var artifacts = [DatabaseSectionArtifact]()
-        for (kind, stride) in columnDefinitions {
-            let writer = columnWriters[kind]!
-            let result = try writer.close()
-            artifacts.append(
-                DatabaseSectionArtifact(
-                    kind: kind,
-                    url: writer.url,
-                    length: result.length,
-                    count: UInt64(initial.recordCount),
-                    stride: stride,
-                    hash: result.hash
-                )
-            )
+        guard ignoredFingerprint.digest() == initial.fingerprint else {
+            throw DatabaseFormatError.invalidHeader("GeoNames input changed between build passes")
         }
+        var artifacts = [DatabaseSectionArtifact]()
+        let locationResult = try locationWriter.close()
+        artifacts.append(
+            DatabaseSectionArtifact(
+                kind: .locations,
+                url: locationWriter.url,
+                length: locationResult.length,
+                count: UInt64(initial.recordCount),
+                stride: 64,
+                hash: locationResult.hash
+            )
+        )
         let canonicalResult = try canonicalStrings.close()
         artifacts.append(
             DatabaseSectionArtifact(
@@ -1020,13 +935,11 @@ final class GeocodingDatabaseBuilder {
             contentsOf: try writeAdministrativeAliases(administrativeAliases)
         )
         artifacts.append(try writeDenseIDMap(idToRow))
-        for writer in searchWriters {
-            _ = try writer.close()
-        }
+        _ = try searchWriter.close()
         return RecordBuildOutput(
             artifacts: artifacts,
             timezones: timezones,
-            searchPartitions: searchURLs
+            searchCandidates: searchWriter.url
         )
     }
 
@@ -1037,7 +950,8 @@ final class GeocodingDatabaseBuilder {
         admin1ID: Int32,
         row: UInt32,
         ranking: Float,
-        partitions: SearchCandidatePartitions
+        sources: MatchSources,
+        writer: BufferedBinaryWriter
     ) throws {
         let value = bytes.withUnsafeBufferPointer {
             String(bytes: $0, encoding: .utf8)
@@ -1048,24 +962,20 @@ final class GeocodingDatabaseBuilder {
                 "search name is not valid UTF-8"
             )
         }
-        let normalized =
-            value
-            .folding(options: .diacriticInsensitive, locale: nil)
-            .lowercased()
+        let normalized = SearchTextNormalizer.foldAndLowercase(value)
         guard
             let characterCount = UInt16(exactly: normalized.count),
             let byteCount = UInt32(exactly: normalized.utf8.count)
         else {
             throw GeoNamesImportError.tooManyValues("characters in a search name")
         }
-        let writer = partitions.writer(indexID: indexID, country: country)
         try writer.write(indexID)
         try writer.write(country)
         try writer.write(admin1ID)
         try writer.write(row)
         try writer.write(ranking)
         try writer.write(characterCount)
-        try writer.write(UInt16(0))
+        try writer.write(sources.rawValue)
         try writer.write(byteCount)
         let normalizedBytes = Array(normalized.utf8)
         try normalizedBytes.withUnsafeBytes {
@@ -1129,9 +1039,7 @@ final class GeocodingDatabaseBuilder {
     }
 
     private func writeAdministrativeAliases(
-        _ aliases: [
-            AdministrativeAliasBuildKey: Set<AdministrativeAliasBuildCandidate>
-        ]
+        _ aliases: [AdministrativeAliasBuildKey: Set<AdministrativeAliasBuildCandidate>]
     ) throws -> [DatabaseSectionArtifact] {
         func namePrecedes(_ lhs: String, _ rhs: String) -> Bool {
             let left = Array(lhs.utf8)
@@ -1221,26 +1129,38 @@ final class GeocodingDatabaseBuilder {
         ]
     }
 
-    private func alternatePartitionCount() throws -> Int {
-        let attributes = try fileManager.attributesOfItem(
-            atPath: paths.alternateNamesFile.path
-        )
-        let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
-        let target = max(16 << 20, options.memoryLimitBytes / 8)
-        var partitions = 16
-        while size / partitions > target {
-            partitions *= 2
-        }
-        return partitions
-    }
-
     private func publish(output: URL) throws {
         let destination = paths.databaseFile.path
+        if !options.force {
+            // Hard-link publication is atomic and fails if the destination exists.
+            guard link(output.path, destination) == 0 else {
+                throw DatabaseBuildIOError.write(
+                    path: destination,
+                    message: "Publication failed (use --force to replace): \(String(cString: strerror(errno)))"
+                )
+            }
+            try fileManager.removeItem(at: output)
+            try synchronizeDirectory()
+            return
+        }
         guard rename(output.path, destination) == 0 else {
             throw DatabaseBuildIOError.write(
                 path: destination,
                 message: String(cString: strerror(errno))
             )
+        }
+        try synchronizeDirectory()
+    }
+
+    private func synchronizeDirectory() throws {
+        let path = paths.databaseFile.deletingLastPathComponent().path
+        let descriptor = open(path, O_RDONLY)
+        guard descriptor >= 0 else {
+            throw DatabaseBuildIOError.open(path: path, message: String(cString: strerror(errno)))
+        }
+        defer { close(descriptor) }
+        guard fsync(descriptor) == 0 else {
+            throw DatabaseBuildIOError.write(path: path, message: String(cString: strerror(errno)))
         }
     }
 

@@ -7,6 +7,7 @@ private struct SearchNameCandidate {
     let admin1ID: UInt32
     let row: UInt32
     let ranking: Float
+    var sources: MatchSources
     let characterCount: UInt16
     let nameOffset: Int
     let nameLength: Int
@@ -17,6 +18,7 @@ private struct SearchPostingCandidate {
     let admin1ID: UInt32
     let row: UInt32
     let ranking: Float
+    var sources: MatchSources
 }
 
 private struct OrdinalViewRecord {
@@ -59,14 +61,12 @@ private func compareLexicographically(
 }
 
 private final class CandidateRunCursor {
-    let mapped: MappedFile
-    let bytes: UnsafeRawBufferPointer
+    private let reader: BinaryRecordReader
+    private var record = Data()
     private(set) var candidate: SearchNameCandidate?
-    private var nextOffset = 0
 
     init(url: URL) throws {
-        mapped = try MappedFile(url: url)
-        bytes = try mapped.bytes(offset: 0, length: UInt64(mapped.count))
+        reader = try BinaryRecordReader(url: url, headerSize: 24, lengthOffset: 20)
         try advance()
     }
 
@@ -74,115 +74,27 @@ private final class CandidateRunCursor {
         _ value: SearchNameCandidate,
         _ body: (borrowing Span<UInt8>) throws -> Result
     ) rethrows -> Result {
-        let name = UnsafeRawBufferPointer(
-            rebasing: bytes[value.nameOffset..<value.nameOffset + value.nameLength]
-        )
-        return try body(Span(_unsafeBytes: name))
+        try record.withUnsafeBytes { bytes in
+            try body(Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: bytes[24...])))
+        }
     }
 
     func advance() throws {
-        guard nextOffset < bytes.count else {
-            candidate = nil
-            return
-        }
-        guard nextOffset + 24 <= bytes.count else {
-            throw DatabaseBuildIOError.read(
-                path: mapped.path,
-                message: "truncated sorted search candidate"
+        guard let record = try reader.next() else { candidate = nil; return }
+        self.record = record
+        candidate = record.withUnsafeBytes { bytes in
+            SearchNameCandidate(
+                indexID: bytes.readUInt16(at: 0),
+                country: bytes.readUInt16(at: 2),
+                admin1ID: bytes.readUInt32(at: 4),
+                row: bytes.readUInt32(at: 8),
+                ranking: Float(bitPattern: bytes.readUInt32(at: 12)),
+                sources: MatchSources(rawValue: bytes.readUInt16(at: 18)),
+                characterCount: bytes.readUInt16(at: 16),
+                nameOffset: 24,
+                nameLength: record.count - 24
             )
         }
-        let nameLength = Int(bytes.readUInt32(at: nextOffset + 20))
-        let nameOffset = nextOffset + 24
-        guard nameLength <= bytes.count - nameOffset else {
-            throw DatabaseBuildIOError.read(
-                path: mapped.path,
-                message: "sorted candidate name exceeds run"
-            )
-        }
-        candidate = SearchNameCandidate(
-            indexID: bytes.readUInt16(at: nextOffset),
-            country: bytes.readUInt16(at: nextOffset + 2),
-            admin1ID: bytes.readUInt32(at: nextOffset + 4),
-            row: bytes.readUInt32(at: nextOffset + 8),
-            ranking: Float(bitPattern: bytes.readUInt32(at: nextOffset + 12)),
-            characterCount: bytes.readUInt16(at: nextOffset + 16),
-            nameOffset: nameOffset,
-            nameLength: nameLength
-        )
-        nextOffset = nameOffset + nameLength
-    }
-}
-
-private struct CandidateMergeHeap {
-    var values = [Int]()
-    let cursors: [CandidateRunCursor]
-
-    mutating func insert(_ run: Int) {
-        values.append(run)
-        var index = values.count - 1
-        while index > 0 {
-            let parent = (index - 1) / 2
-            guard precedes(run: values[index], run: values[parent]) else {
-                break
-            }
-            values.swapAt(index, parent)
-            index = parent
-        }
-    }
-
-    mutating func removeMinimum() -> Int? {
-        guard !values.isEmpty else {
-            return nil
-        }
-        if values.count == 1 {
-            return values.removeLast()
-        }
-        let result = values[0]
-        values[0] = values.removeLast()
-        var index = 0
-        while true {
-            let left = index * 2 + 1
-            guard left < values.count else {
-                break
-            }
-            let right = left + 1
-            let child =
-                right < values.count
-                    && precedes(run: values[right], run: values[left])
-                ? right : left
-            guard precedes(run: values[child], run: values[index]) else {
-                break
-            }
-            values.swapAt(index, child)
-            index = child
-        }
-        return result
-    }
-
-    private func precedes(run lhsIndex: Int, run rhsIndex: Int) -> Bool {
-        let lhs = cursors[lhsIndex].candidate!
-        let rhs = cursors[rhsIndex].candidate!
-        if lhs.indexID != rhs.indexID {
-            return lhs.indexID < rhs.indexID
-        }
-        let order = cursors[lhsIndex].withName(lhs) { lhsName in
-            cursors[rhsIndex].withName(rhs) { rhsName in
-                compareLexicographically(lhsName, rhsName)
-            }
-        }
-        if order != 0 {
-            return order < 0
-        }
-        if lhs.ranking != rhs.ranking {
-            return lhs.ranking > rhs.ranking
-        }
-        if lhs.row != rhs.row {
-            return lhs.row < rhs.row
-        }
-        if lhs.country != rhs.country {
-            return lhs.country < rhs.country
-        }
-        return lhs.admin1ID < rhs.admin1ID
     }
 }
 
@@ -405,8 +317,8 @@ private final class SearchIndexSectionWriter {
     let postingWriter: BufferedBinaryWriter
     let globalTreeWriter: BufferedBinaryWriter
     let radix: PackedRadixWriter
-    let countryViewWriters: [BufferedBinaryWriter]
-    let adminViewWriters: [BufferedBinaryWriter]
+    let countryViewWriter: BufferedBinaryWriter
+    let adminViewWriter: BufferedBinaryWriter
 
     private(set) var metadataCount: UInt32 = 0
     private(set) var postingCount: UInt32 = 0
@@ -418,7 +330,7 @@ private final class SearchIndexSectionWriter {
     private var leafSummary = LengthBinnedRankBounds()
     private var leafValues = [UInt16]()
 
-    init(workspace: URL, viewPartitionCount: Int) throws {
+    init(workspace: URL) throws {
         rootWriter = try BufferedBinaryWriter(
             url: workspace.appendingPathComponent("search-roots.section")
         )
@@ -432,29 +344,15 @@ private final class SearchIndexSectionWriter {
             url: workspace.appendingPathComponent("search-global-trees.section")
         )
         radix = try PackedRadixWriter(workspace: workspace)
-        var country = [BufferedBinaryWriter]()
-        var admin = [BufferedBinaryWriter]()
-        for partition in 0..<viewPartitionCount {
-            country.append(
-                try BufferedBinaryWriter(
-                    url: workspace.appendingPathComponent("country-view-\(partition).part")
-                )
-            )
-            admin.append(
-                try BufferedBinaryWriter(
-                    url: workspace.appendingPathComponent("admin-view-\(partition).part")
-                )
-            )
-        }
-        countryViewWriters = country
-        adminViewWriters = admin
+        countryViewWriter = try BufferedBinaryWriter(url: workspace.appendingPathComponent("country-view.input"))
+        adminViewWriter = try BufferedBinaryWriter(url: workspace.appendingPathComponent("admin-view.input"))
     }
 
     func emitGroup(
         indexID: UInt16,
         name: borrowing Span<UInt8>,
         characterCount: UInt16,
-        candidates: [SearchPostingCandidate]
+        next: () throws -> SearchPostingCandidate?
     ) throws {
         if currentIndex != indexID {
             try finishIndex()
@@ -470,17 +368,20 @@ private final class SearchIndexSectionWriter {
         let postingStart = postingCount
         var countries = [UInt16: Float]()
         var admins = [UInt32: Float]()
-        var previousRow: UInt32?
         var acceptedCount: UInt32 = 0
-        for candidate in candidates {
-            if previousRow == candidate.row {
-                continue
+        var pending = try next()
+        let maximumRank = pending?.ranking ?? 0
+        while var candidate = pending {
+            pending = try next()
+            while let duplicate = pending, duplicate.row == candidate.row {
+                candidate.sources.formUnion(duplicate.sources)
+                pending = try next()
             }
-            previousRow = candidate.row
             try postingWriter.write(candidate.row)
             try postingWriter.write(candidate.ranking)
             try postingWriter.write(candidate.country)
             try postingWriter.write(candidate.admin1ID)
+            try postingWriter.write(candidate.sources.rawValue)
             postingCount += 1
             acceptedCount += 1
             if candidate.country != 0 {
@@ -503,7 +404,6 @@ private final class SearchIndexSectionWriter {
         metadataCount += 1
 
         try radix.add(name: name, ordinal: currentOrdinal)
-        let maximumRank = candidates.first?.ranking ?? 0
         leafSummary.insert(rank: maximumRank, characterCount: characterCount)
         leafItemCount += 1
         if leafItemCount == PackedRadixIndexLayout.namesPerLeaf {
@@ -514,7 +414,7 @@ private final class SearchIndexSectionWriter {
 
         for (country, rank) in countries {
             try writeViewRecord(
-                writer: countryViewWriters[viewPartition(indexID: indexID, area: UInt32(country))],
+                writer: countryViewWriter,
                 indexID: indexID,
                 characterCount: characterCount,
                 area: UInt32(country),
@@ -524,7 +424,7 @@ private final class SearchIndexSectionWriter {
         }
         for (admin, rank) in admins {
             try writeViewRecord(
-                writer: adminViewWriters[viewPartition(indexID: indexID, area: admin)],
+                writer: adminViewWriter,
                 indexID: indexID,
                 characterCount: characterCount,
                 area: admin,
@@ -537,7 +437,7 @@ private final class SearchIndexSectionWriter {
 
     func finish() throws {
         try finishIndex()
-        for writer in countryViewWriters + adminViewWriters {
+        for writer in [countryViewWriter, adminViewWriter] {
             _ = try writer.close()
         }
     }
@@ -566,12 +466,6 @@ private final class SearchIndexSectionWriter {
         currentIndex = nil
     }
 
-    private func viewPartition(indexID: UInt16, area: UInt32) -> Int {
-        var hash = UInt32(indexID) &* 2_654_435_761
-        hash ^= area &* 2_246_822_519
-        return Int(hash & UInt32(countryViewWriters.count - 1))
-    }
-
     private func writeViewRecord(
         writer: BufferedBinaryWriter,
         indexID: UInt16,
@@ -591,34 +485,29 @@ private final class SearchIndexSectionWriter {
 final class PackedRadixIndexBuilder {
     private let logger: Logger
     private let workspace: URL
-    private let sourcePartitions: [URL]
+    private let source: URL
     private let memoryLimitBytes: Int
     private let fileManager = FileManager.default
 
     init(
         logger: Logger,
         workspace: URL,
-        sourcePartitions: [URL],
+        source: URL,
         memoryLimitBytes: Int
     ) {
         self.logger = logger
         self.workspace = workspace
-        self.sourcePartitions = sourcePartitions
+        self.source = source
         self.memoryLimitBytes = memoryLimitBytes
     }
 
-    func build() async throws -> [DatabaseSectionArtifact] {
-        let runs = try await makeSortedRuns()
-        defer {
-            for url in runs {
-                try? fileManager.removeItem(at: url)
-            }
-        }
+    func build() throws -> [DatabaseSectionArtifact] {
+        let sortedCandidates = try sortCandidates()
+        defer { try? fileManager.removeItem(at: sortedCandidates) }
         let output = try SearchIndexSectionWriter(
-            workspace: workspace,
-            viewPartitionCount: 32
+            workspace: workspace
         )
-        try merge(runs: runs, output: output)
+        try writeIndex(sortedCandidates: sortedCandidates, output: output)
         try output.finish()
 
         var artifacts = [DatabaseSectionArtifact]()
@@ -674,7 +563,7 @@ final class PackedRadixIndexBuilder {
         artifacts.append(
             contentsOf: try buildAreaView(
                 kind: "country",
-                partitions: output.countryViewWriters.map(\.url),
+                partitions: [output.countryViewWriter.url],
                 bucketSection: .searchCountryBuckets,
                 entrySection: .searchCountryEntries,
                 treeSection: .searchCountryTrees
@@ -683,7 +572,7 @@ final class PackedRadixIndexBuilder {
         artifacts.append(
             contentsOf: try buildAreaView(
                 kind: "admin",
-                partitions: output.adminViewWriters.map(\.url),
+                partitions: [output.adminViewWriter.url],
                 bucketSection: .searchAdminBuckets,
                 entrySection: .searchAdminEntries,
                 treeSection: .searchAdminTrees
@@ -692,176 +581,61 @@ final class PackedRadixIndexBuilder {
         return artifacts
     }
 
-    private func makeSortedRuns() async throws -> [URL] {
-        var jobs = [(partition: Int, url: URL, size: Int)]()
-        for (partition, url) in sourcePartitions.enumerated() {
-            let attributes = try fileManager.attributesOfItem(atPath: url.path)
-            let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
-            if size == 0 {
-                try fileManager.removeItem(at: url)
-                continue
-            }
-            jobs.append((partition, url, size))
-        }
-        guard !jobs.isEmpty else {
-            return []
-        }
-
-        let largestPartition = jobs.map(\.size).max() ?? 1
-        let estimatedPartitionBytes =
-            largestPartition > Int.max / 3
-            ? Int.max : largestPartition * 3
-        let estimatedBytesPerTask = max(32 << 20, estimatedPartitionBytes)
-        let memoryBound = max(1, memoryLimitBytes / estimatedBytesPerTask)
-        let concurrency = min(
-            jobs.count,
-            max(
-                1,
-                min(ProcessInfo.processInfo.activeProcessorCount, memoryBound)
+    private func sortCandidates() throws -> URL {
+        let run = try ExternalSort.sort(
+            inputs: [source],
+            workspace: workspace,
+            label: "search",
+            headerSize: 24,
+            lengthOffset: 20,
+            memoryBytes: memoryLimitBytes
+        ) { lhs, rhs in
+            let leftID = lhs.readUInt16(at: 0)
+            let rightID = rhs.readUInt16(at: 0)
+            if leftID != rightID { return leftID < rightID }
+            let order = compareLexicographically(
+                Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: lhs[24...])),
+                Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: rhs[24...]))
             )
-        )
-        logger.info(
-            "Packed radix index: sorting \(jobs.count) runs with automatic concurrency \(concurrency)"
-        )
-        let workspace = self.workspace
-
-        return try await withThrowingTaskGroup(
-            of: (Int, URL).self,
-            returning: [URL].self
-        ) { group in
-            var nextJob = 0
-            for _ in 0..<concurrency {
-                let job = jobs[nextJob]
-                group.addTask {
-                    try Self.sortPartition(
-                        partition: job.partition,
-                        source: job.url,
-                        workspace: workspace
-                    )
-                }
-                nextJob += 1
-            }
-
-            var completed = [(Int, URL)]()
-            completed.reserveCapacity(jobs.count)
-            while let result = try await group.next() {
-                completed.append(result)
-                if nextJob < jobs.count {
-                    let job = jobs[nextJob]
-                    group.addTask {
-                        try Self.sortPartition(
-                            partition: job.partition,
-                            source: job.url,
-                            workspace: workspace
-                        )
-                    }
-                    nextJob += 1
-                }
-            }
-            return completed.sorted { $0.0 < $1.0 }.map(\.1)
+            if order != 0 { return order < 0 }
+            let leftRank = Float(bitPattern: lhs.readUInt32(at: 12))
+            let rightRank = Float(bitPattern: rhs.readUInt32(at: 12))
+            if leftRank != rightRank { return leftRank > rightRank }
+            if lhs.readUInt32(at: 8) != rhs.readUInt32(at: 8) { return lhs.readUInt32(at: 8) < rhs.readUInt32(at: 8) }
+            if lhs.readUInt16(at: 2) != rhs.readUInt16(at: 2) { return lhs.readUInt16(at: 2) < rhs.readUInt16(at: 2) }
+            return lhs.readUInt32(at: 4) < rhs.readUInt32(at: 4)
         }
+        try fileManager.removeItem(at: source)
+        return run
     }
 
-    private static func sortPartition(
-        partition: Int,
-        source: URL,
-        workspace: URL
-    ) throws -> (Int, URL) {
-        let mapped = try MappedFile(url: source)
-        let bytes = try mapped.bytes(offset: 0, length: UInt64(mapped.count))
-        var candidates = try parseCandidates(bytes: bytes, path: source.path)
-        candidates.sort { compare($0, $1, bytes: bytes) }
-        let runURL = workspace.appendingPathComponent(
-            "search-sorted-\(partition).run"
-        )
-        let writer = try BufferedBinaryWriter(url: runURL)
-        for candidate in candidates {
-            try writer.write(candidate.indexID)
-            try writer.write(candidate.country)
-            try writer.write(candidate.admin1ID)
-            try writer.write(candidate.row)
-            try writer.write(candidate.ranking)
-            try writer.write(candidate.characterCount)
-            try writer.write(UInt16(0))
-            try writer.write(UInt32(candidate.nameLength))
-            try writer.write(
-                Span(
-                    _unsafeBytes: UnsafeRawBufferPointer(
-                        rebasing: bytes[
-                            candidate.nameOffset..<candidate.nameOffset + candidate.nameLength
-                        ]
-                    )
-                )
-            )
-        }
-        _ = try writer.close()
-        try FileManager.default.removeItem(at: source)
-        return (partition, runURL)
-    }
-
-    private func merge(
-        runs: [URL],
-        output: SearchIndexSectionWriter
-    ) throws {
-        let cursors = try runs.map(CandidateRunCursor.init)
-        var heap = CandidateMergeHeap(cursors: cursors)
-        for index in cursors.indices where cursors[index].candidate != nil {
-            heap.insert(index)
-        }
-        var currentIndex: UInt16?
-        var currentName = [UInt8]()
-        var currentCharacters: UInt16 = 0
-        var group = [SearchPostingCandidate]()
-
-        func finishGroup() throws {
-            guard let currentIndex else {
-                return
-            }
-            try currentName.withUnsafeBufferPointer {
+    private func writeIndex(sortedCandidates: URL, output: SearchIndexSectionWriter) throws {
+        let cursor = try CandidateRunCursor(url: sortedCandidates)
+        while let first = cursor.candidate {
+            let name = cursor.withName(first) { $0.withUnsafeBufferPointer { Array($0) } }
+            try name.withUnsafeBufferPointer { buffer in
                 try output.emitGroup(
-                    indexID: currentIndex,
-                    name: Span(_unsafeElements: $0),
-                    characterCount: currentCharacters,
-                    candidates: group
-                )
-            }
-        }
-
-        while let run = heap.removeMinimum() {
-            let cursor = cursors[run]
-            let candidate = cursor.candidate!
-            try cursor.withName(candidate) { name in
-                let sameGroup =
-                    currentIndex == candidate.indexID
-                    && currentName.count == name.count
-                    && currentName.withUnsafeBufferPointer {
-                        compareLexicographically(
-                            Span(_unsafeElements: $0),
-                            name
-                        ) == 0
+                    indexID: first.indexID,
+                    name: Span(_unsafeElements: buffer),
+                    characterCount: first.characterCount
+                ) {
+                    guard let candidate = cursor.candidate, candidate.indexID == first.indexID else { return nil }
+                    let matches = cursor.withName(candidate) {
+                        compareLexicographically($0, Span(_unsafeElements: buffer)) == 0
                     }
-                if !sameGroup {
-                    try finishGroup()
-                    currentIndex = candidate.indexID
-                    currentName = name.withUnsafeBufferPointer { Array($0) }
-                    currentCharacters = candidate.characterCount
-                    group.removeAll(keepingCapacity: true)
+                    guard matches else { return nil }
+                    let result = SearchPostingCandidate(
+                        country: candidate.country,
+                        admin1ID: candidate.admin1ID,
+                        row: candidate.row,
+                        ranking: candidate.ranking,
+                        sources: candidate.sources
+                    )
+                    try cursor.advance()
+                    return result
                 }
             }
-            group.append(
-                SearchPostingCandidate(
-                    country: candidate.country,
-                    admin1ID: candidate.admin1ID,
-                    row: candidate.row,
-                    ranking: candidate.ranking
-                )
-            )
-            try cursor.advance()
-            if cursor.candidate != nil {
-                heap.insert(run)
-            }
         }
-        try finishGroup()
     }
 
     private func buildAreaView(
@@ -881,96 +655,77 @@ final class PackedRadixIndexBuilder {
         var treeNodeCount: UInt32 = 0
         var buckets = [AreaViewBuild]()
 
-        for url in partitions {
-            let attributes = try fileManager.attributesOfItem(atPath: url.path)
-            if (attributes[.size] as? NSNumber)?.uint64Value == 0 {
-                try fileManager.removeItem(at: url)
-                continue
-            }
-            let mapped = try MappedFile(url: url)
-            let bytes = try mapped.bytes(offset: 0, length: UInt64(mapped.count))
-            guard bytes.count % 16 == 0 else {
-                throw DatabaseBuildIOError.read(
-                    path: url.path,
-                    message: "invalid area view record size"
-                )
-            }
-            var records = [OrdinalViewRecord]()
-            records.reserveCapacity(bytes.count / 16)
-            for offset in stride(from: 0, to: bytes.count, by: 16) {
-                records.append(
-                    OrdinalViewRecord(
-                        indexID: bytes.readUInt16(at: offset),
-                        characterCount: bytes.readUInt16(at: offset + 2),
-                        area: bytes.readUInt32(at: offset + 4),
-                        nameOrdinal: bytes.readUInt32(at: offset + 8),
-                        maximumRank: Float(
-                            bitPattern: bytes.readUInt32(at: offset + 12)
-                        )
-                    )
-                )
-            }
-            records.sort {
-                if $0.indexID != $1.indexID {
-                    return $0.indexID < $1.indexID
-                }
-                if $0.area != $1.area {
-                    return $0.area < $1.area
-                }
-                return $0.nameOrdinal < $1.nameOrdinal
-            }
-            var offset = 0
-            while offset < records.count {
-                let indexID = records[offset].indexID
-                let area = records[offset].area
-                let entryStart = entryCount
-                var leafCount = 0
-                var leafSummary = LengthBinnedRankBounds()
-                var leafValues = [UInt16]()
-                while offset < records.count,
-                    records[offset].indexID == indexID,
-                    records[offset].area == area
-                {
-                    let record = records[offset]
-                    try entryWriter.write(record.nameOrdinal)
-                    try entryWriter.write(
-                        PackedRadixIndexLayout.encodeRankBound(record.maximumRank)
-                    )
-                    entryCount += 1
-                    leafSummary.insert(
-                        rank: record.maximumRank,
-                        characterCount: record.characterCount
-                    )
-                    leafCount += 1
-                    if leafCount == PackedRadixIndexLayout.namesPerLeaf {
-                        leafSummary.append(to: &leafValues)
-                        leafSummary = LengthBinnedRankBounds()
-                        leafCount = 0
-                    }
-                    offset += 1
-                }
-                if leafCount > 0 {
-                    leafSummary.append(to: &leafValues)
-                }
-                let treeStart = treeNodeCount
-                let leafBase = try writeRankBoundTree(
-                    leaves: leafValues,
-                    writer: treeWriter,
-                    nodeCount: &treeNodeCount
-                )
-                buckets.append(
-                    AreaViewBuild(
-                        indexID: indexID,
-                        area: area,
-                        entryStart: entryStart,
-                        entryCount: entryCount - entryStart,
-                        treeStart: treeStart,
-                        treeLeafBase: leafBase
-                    )
-                )
-            }
-            try fileManager.removeItem(at: url)
+        let sorted = try ExternalSort.sort(
+            inputs: partitions,
+            workspace: workspace,
+            label: "view-\(kind)",
+            headerSize: 16,
+            memoryBytes: memoryLimitBytes
+        ) { lhs, rhs in
+            if lhs.readUInt16(at: 0) != rhs.readUInt16(at: 0) { return lhs.readUInt16(at: 0) < rhs.readUInt16(at: 0) }
+            if lhs.readUInt32(at: 4) != rhs.readUInt32(at: 4) { return lhs.readUInt32(at: 4) < rhs.readUInt32(at: 4) }
+            return lhs.readUInt32(at: 8) < rhs.readUInt32(at: 8)
         }
+        for url in partitions { try fileManager.removeItem(at: url) }
+        let reader = try BinaryRecordReader(url: sorted, headerSize: 16)
+        func next() throws -> OrdinalViewRecord? {
+            try reader.withNextRecord { bytes in
+                OrdinalViewRecord(
+                    indexID: bytes.readUInt16(at: 0),
+                    characterCount: bytes.readUInt16(at: 2),
+                    area: bytes.readUInt32(at: 4),
+                    nameOrdinal: bytes.readUInt32(at: 8),
+                    maximumRank: Float(bitPattern: bytes.readUInt32(at: 12))
+                )
+            }
+        }
+        var current = try next()
+        while let first = current {
+            let indexID = first.indexID
+            let area = first.area
+            let entryStart = entryCount
+            var leafCount = 0
+            var leafSummary = LengthBinnedRankBounds()
+            var leafValues = [UInt16]()
+            while let record = current, record.indexID == indexID, record.area == area {
+                try entryWriter.write(record.nameOrdinal)
+                try entryWriter.write(
+                    PackedRadixIndexLayout.encodeRankBound(record.maximumRank)
+                )
+                entryCount += 1
+                leafSummary.insert(
+                    rank: record.maximumRank,
+                    characterCount: record.characterCount
+                )
+                leafCount += 1
+                if leafCount == PackedRadixIndexLayout.namesPerLeaf {
+                    leafSummary.append(to: &leafValues)
+                    leafSummary = LengthBinnedRankBounds()
+                    leafCount = 0
+                }
+                current = try next()
+            }
+            if leafCount > 0 {
+                leafSummary.append(to: &leafValues)
+            }
+            let treeStart = treeNodeCount
+            let leafBase = try writeRankBoundTree(
+                leaves: leafValues,
+                writer: treeWriter,
+                nodeCount: &treeNodeCount
+            )
+            buckets.append(
+                AreaViewBuild(
+                    indexID: indexID,
+                    area: area,
+                    entryStart: entryStart,
+                    entryCount: entryCount - entryStart,
+                    treeStart: treeStart,
+                    treeLeafBase: leafBase
+                )
+            )
+        }
+        try fileManager.removeItem(at: sorted)
 
         let bucketWriter = try BufferedBinaryWriter(
             url: workspace.appendingPathComponent("search-\(kind)-buckets.section")
@@ -1005,77 +760,6 @@ final class PackedRadixIndexBuilder {
                 stride: UInt32(PackedRadixIndexLayout.treeNodeStride)
             ),
         ]
-    }
-
-    private static func parseCandidates(
-        bytes: UnsafeRawBufferPointer,
-        path: String
-    ) throws -> [SearchNameCandidate] {
-        var result = [SearchNameCandidate]()
-        result.reserveCapacity(max(1, bytes.count / 40))
-        var offset = 0
-        while offset < bytes.count {
-            guard offset + 24 <= bytes.count else {
-                throw DatabaseBuildIOError.read(path: path, message: "truncated search candidate")
-            }
-            let nameLength = Int(bytes.readUInt32(at: offset + 20))
-            let nameOffset = offset + 24
-            guard nameLength <= bytes.count - nameOffset else {
-                throw DatabaseBuildIOError.read(
-                    path: path,
-                    message: "search candidate name exceeds partition"
-                )
-            }
-            result.append(
-                SearchNameCandidate(
-                    indexID: bytes.readUInt16(at: offset),
-                    country: bytes.readUInt16(at: offset + 2),
-                    admin1ID: bytes.readUInt32(at: offset + 4),
-                    row: bytes.readUInt32(at: offset + 8),
-                    ranking: Float(bitPattern: bytes.readUInt32(at: offset + 12)),
-                    characterCount: bytes.readUInt16(at: offset + 16),
-                    nameOffset: nameOffset,
-                    nameLength: nameLength
-                )
-            )
-            offset = nameOffset + nameLength
-        }
-        return result
-    }
-
-    private static func compare(
-        _ lhs: SearchNameCandidate,
-        _ rhs: SearchNameCandidate,
-        bytes: UnsafeRawBufferPointer
-    ) -> Bool {
-        if lhs.indexID != rhs.indexID {
-            return lhs.indexID < rhs.indexID
-        }
-        let order = compareLexicographically(
-            Span(
-                _unsafeBytes: UnsafeRawBufferPointer(
-                    rebasing: bytes[lhs.nameOffset..<lhs.nameOffset + lhs.nameLength]
-                )
-            ),
-            Span(
-                _unsafeBytes: UnsafeRawBufferPointer(
-                    rebasing: bytes[rhs.nameOffset..<rhs.nameOffset + rhs.nameLength]
-                )
-            )
-        )
-        if order != 0 {
-            return order < 0
-        }
-        if lhs.ranking != rhs.ranking {
-            return lhs.ranking > rhs.ranking
-        }
-        if lhs.row != rhs.row {
-            return lhs.row < rhs.row
-        }
-        if lhs.country != rhs.country {
-            return lhs.country < rhs.country
-        }
-        return lhs.admin1ID < rhs.admin1ID
     }
 
     private func closeArtifact(

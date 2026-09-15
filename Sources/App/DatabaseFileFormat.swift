@@ -28,25 +28,7 @@ enum DatabaseFormatError: Error, CustomStringConvertible {
 
 enum DatabaseSectionKind: UInt32, CaseIterable, CustomStringConvertible {
     case idToRow = 1
-    case rowToID = 2
-    case latitude = 3
-    case longitude = 4
-    case ranking = 5
-    case elevation = 6
-    case feature = 7
-    case countryISO2 = 8
-    case countryID = 9
-    case admin1ID = 10
-    case admin2ID = 11
-    case admin3ID = 12
-    case admin4ID = 13
-    case timezoneIndex = 14
-    case population = 15
-    case nameOffset = 16
-    case alternateStart = 17
-    case alternateCount = 18
-    case postcodeStart = 19
-    case postcodeCount = 20
+    case locations = 2
     case canonicalStrings = 21
     case alternateRecords = 22
     case alternateStrings = 23
@@ -103,8 +85,8 @@ struct DatabaseSectionDescriptor: Equatable {
 }
 
 struct DatabaseFileHeader {
-    static let magic = Array("GEOCDV2\u{0}".utf8)
-    static let formatVersion: UInt32 = 2
+    static let magic = Array("GEOCDV3\u{0}".utf8)
+    static let formatVersion: UInt32 = 3
     static let encodedSize = 4096
     static let directoryOffset = 64
     static let maximumSectionCount =
@@ -173,8 +155,11 @@ struct DatabaseFileHeader {
         guard sectionCount <= Self.maximumSectionCount else {
             throw DatabaseFormatError.invalidHeader("section directory is too large")
         }
-        guard bytes[52..<Self.directoryOffset].allSatisfy({ $0 == 0 }) else {
-            throw DatabaseFormatError.invalidHeader("reserved header bytes are not zero")
+        guard bytes.readUInt32(at: 52) == SearchScorer.normalizationVersion,
+            bytes.readUInt32(at: 56) == SearchScorer.version,
+            bytes.readUInt32(at: 60) == 0
+        else {
+            throw DatabaseFormatError.invalidHeader("incompatible normalization/scoring version or reserved bytes")
         }
 
         var descriptors = [DatabaseSectionDescriptor]()
@@ -249,6 +234,8 @@ struct DatabaseFileHeader {
         data.writeLittleEndian(alternateNamesFingerprint, at: 40)
         let descriptors = sections.values.sorted { $0.kind.rawValue < $1.kind.rawValue }
         data.writeLittleEndian(UInt32(descriptors.count), at: 48)
+        data.writeLittleEndian(SearchScorer.normalizationVersion, at: 52)
+        data.writeLittleEndian(SearchScorer.version, at: 56)
         for (index, descriptor) in descriptors.enumerated() {
             descriptor.encode(
                 into: &data,
@@ -283,7 +270,9 @@ struct MappedDatabaseSection {
     func withSpan<Result>(
         _ body: (borrowing Span<UInt8>) throws -> Result
     ) rethrows -> Result {
-        try body(Span(_unsafeBytes: bytes))
+        try withExtendedLifetime(owner) {
+            try body(Span(_unsafeBytes: bytes))
+        }
     }
 
     func uint8(at index: Int) -> UInt8 {
@@ -320,6 +309,10 @@ struct MappedDatabaseSection {
 }
 
 extension UnsafeRawBufferPointer {
+    @inline(__always)
+    func containsRange(offset: Int, length: Int) -> Bool {
+        offset >= 0 && length >= 0 && offset <= count && length <= count - offset
+    }
     @inline(__always)
     func readUInt16(at offset: Int) -> UInt16 {
         precondition(offset >= 0 && offset + 2 <= count)

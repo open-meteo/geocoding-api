@@ -13,7 +13,10 @@ public func configure(_ app: Application) async throws {
     #endif
 
     app.asyncCommands.use(BuildDatabaseCommand(), as: "build-database")
-    if app.environment.commandInput.arguments.first == "build-database" {
+    app.asyncCommands.use(VerifyDatabaseCommand(), as: "verify-database")
+    if let command = app.environment.commandInput.arguments.first,
+        ["build-database", "verify-database"].contains(command)
+    {
         return
     }
 

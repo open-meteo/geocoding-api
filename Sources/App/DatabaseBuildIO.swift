@@ -263,11 +263,13 @@ final class BufferedBinaryWriter {
     private let handle: FileHandle
     private var buffer = Data()
     private var hasher = XXHash64()
+    private let capacity: Int
     private(set) var byteCount: UInt64 = 0
     private(set) var isClosed = false
 
-    init(url: URL, capacity: Int = 1 << 20) throws {
+    init(url: URL, capacity: Int = 64 << 10) throws {
         self.url = url
+        self.capacity = capacity
         guard FileManager.default.createFile(atPath: url.path, contents: nil) else {
             throw DatabaseBuildIOError.open(path: url.path, message: "createFile failed")
         }
@@ -285,9 +287,8 @@ final class BufferedBinaryWriter {
     }
 
     func write(_ value: UInt16) throws {
-        buffer.append(UInt8(truncatingIfNeeded: value))
-        buffer.append(UInt8(truncatingIfNeeded: value >> 8))
-        try flushIfNeeded()
+        var littleEndian = value.littleEndian
+        try withUnsafeBytes(of: &littleEndian) { try write($0) }
     }
 
     func write(_ value: Int16) throws {
@@ -295,11 +296,8 @@ final class BufferedBinaryWriter {
     }
 
     func write(_ value: UInt32) throws {
-        buffer.append(UInt8(truncatingIfNeeded: value))
-        buffer.append(UInt8(truncatingIfNeeded: value >> 8))
-        buffer.append(UInt8(truncatingIfNeeded: value >> 16))
-        buffer.append(UInt8(truncatingIfNeeded: value >> 24))
-        try flushIfNeeded()
+        var littleEndian = value.littleEndian
+        try withUnsafeBytes(of: &littleEndian) { try write($0) }
     }
 
     func write(_ value: Int32) throws {
@@ -307,8 +305,8 @@ final class BufferedBinaryWriter {
     }
 
     func write(_ value: UInt64) throws {
-        try write(UInt32(truncatingIfNeeded: value))
-        try write(UInt32(truncatingIfNeeded: value >> 32))
+        var littleEndian = value.littleEndian
+        try withUnsafeBytes(of: &littleEndian) { try write($0) }
     }
 
     func write(_ value: Float) throws {
@@ -364,7 +362,7 @@ final class BufferedBinaryWriter {
     }
 
     private func flushIfNeeded() throws {
-        if buffer.count >= 1 << 20 {
+        if buffer.count >= capacity {
             try flush()
         }
     }

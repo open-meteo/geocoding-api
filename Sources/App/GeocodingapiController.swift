@@ -20,7 +20,7 @@ struct GeocodingapiController: RouteCollection, Sendable {
 
     public init(_ app: Application) async throws {
         self.init(
-            database: try await GeocodingDatabase.loadOrCreate(
+            database: try GeocodingDatabase.open(
                 logger: app.logger
             )
         )
@@ -85,8 +85,8 @@ struct GeocodingapiController: RouteCollection, Sendable {
         let count = try params.getCount()
 
         let parsedName = Self.parseSearchName(params.name)
-        let administrativeAreaResolution = parsedName.areaName.map {
-            administrativeAreaResolver.resolve(
+        let administrativeAreaResolution = try parsedName.areaName.map {
+            try administrativeAreaResolver.resolve(
                 $0,
                 languageID: languageId,
                 countryCode: params.countryCode
@@ -96,7 +96,7 @@ struct GeocodingapiController: RouteCollection, Sendable {
         let results =
             parsedName.name.count < 2
             ? []
-            : database.searchIndex.search(
+            : try database.searchIndex.search(
                 parsedName.name,
                 languageID: languageId,
                 count: count,
@@ -104,18 +104,7 @@ struct GeocodingapiController: RouteCollection, Sendable {
                 administrativeArea: administrativeAreaResolution
             )
         var out = GeocodingApi.SearchResults()
-        out.results.reserveCapacity(results.count)
-        for result in results {
-            guard
-                let geoname = try database.response(
-                    id: result.0,
-                    languageID: languageId
-                )
-            else {
-                throw GeocodingApiError.databaseInvariant
-            }
-            out.results.append(geoname)
-        }
+        out.results = try database.responses(hits: results, languageID: languageId)
         out.generationtimeMs = Float(Date().timeIntervalSince(start) * 1000)
         return try out.encode(format: params.format)
     }

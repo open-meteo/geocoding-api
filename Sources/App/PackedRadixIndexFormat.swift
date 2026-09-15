@@ -13,7 +13,7 @@ enum PackedRadixIndexLayout {
     static let nodeStride = 16
     static let edgeStride = 12
     static let nameMetadataStride = 12
-    static let postingStride = 14
+    static let postingStride = 16
     static let treeNodeStride = rankBinCount * 2
     static let areaBucketStride = 28
     static let areaEntryStride = 6
@@ -33,6 +33,7 @@ enum PackedRadixIndexLayout {
         guard rank.isFinite else {
             return emptyRankBound
         }
+        precondition(rank >= 0 && rank <= Float(UInt16.max - 1) / rankScale, "Rank exceeds representable bound")
         let rounded = ceilf(max(0, rank) * rankScale)
         return UInt16(min(Float(UInt16.max - 1), rounded))
     }
@@ -57,12 +58,11 @@ enum PackedRadixIndexLayout {
                 queryCharacters,
                 rankBinLowerBounds[index]
             )
-            let boost: Float
-            if onlyExact || minimumLength == queryCharacters {
-                boost = 1.5
-            } else {
-                boost = 1.5 / Float(minimumLength - queryCharacters + 1)
-            }
+            let boost = SearchScorer.upperBoost(
+                minimumLength: minimumLength,
+                queryCharacters: queryCharacters,
+                onlyExact: onlyExact
+            )
             result = max(result, rank + boost)
         }
         return result
@@ -112,14 +112,11 @@ struct LengthBinnedRankBounds {
                 queryCharacters,
                 PackedRadixIndexLayout.rankBinLowerBounds[index]
             )
-            let boost: Float
-            if onlyExact {
-                boost = 1.5
-            } else if minimumLength == queryCharacters {
-                boost = 1.5
-            } else {
-                boost = 1.5 / Float(minimumLength - queryCharacters + 1)
-            }
+            let boost = SearchScorer.upperBoost(
+                minimumLength: minimumLength,
+                queryCharacters: queryCharacters,
+                onlyExact: onlyExact
+            )
             result = max(result, rank + boost)
         }
         return result

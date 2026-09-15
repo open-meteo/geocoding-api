@@ -5,13 +5,13 @@ struct BuildDatabaseCommand: AsyncCommand {
     struct Signature: CommandSignature {
         @Flag(
             name: "force",
-            help: "Replace an existing database-v2.bin after a successful build."
+            help: "Replace an existing database-v3.bin after a successful build."
         )
         var force: Bool
 
         @Option(
             name: "memory-limit-mb",
-            help: "Approximate total builder memory budget in MiB (default: 1024)."
+            help: "Approximate managed-memory budget in MiB, excluding mapped pages (default: 1024)."
         )
         var memoryLimitMB: String?
     }
@@ -34,15 +34,6 @@ struct BuildDatabaseCommand: AsyncCommand {
             throw Abort(
                 .badRequest,
                 reason: "--memory-limit-mb is too large for this platform."
-            )
-        }
-        if FileManager.default.fileExists(
-            atPath: GeocodingDatabaseBuilder.databaseFile.path
-        ), !signature.force {
-            throw Abort(
-                .conflict,
-                reason:
-                    "database-v2.bin already exists; pass --force to replace it atomically."
             )
         }
         try await GeocodingDatabaseBuilder(
