@@ -42,15 +42,16 @@ extension UnsafeRawBufferPointer {
 
     var asciiToInt32: Int32 {
         let ascii0 = Character("0").asciiValue!
+        var sign: Int32 = 1;
         var ret: Int32 = 0;
         for val in self {
             if val == 45 {
-                ret = ret * -1
+                sign = -1
             } else {
                 ret = ret * 10 + Int32(val - ascii0)
             }
         }
-        return ret
+        return ret * sign
     }
 
     var asciiToUInt32: UInt32 {
@@ -68,31 +69,30 @@ extension UnsafeRawBufferPointer {
 
     var asciiToInt16: Int16 {
         let ascii0 = Character("0").asciiValue!
+        var sign: Int16 = 1;
         var ret: Int16 = 0;
         for val in self {
             if val == 45 {
-                ret = ret * -1
+                sign = -1
             } else {
                 ret = ret * 10 + Int16(val - ascii0)
             }
         }
-        return ret
+        return ret * sign
     }
 
     var asciiToInt8: Int8 {
         let ascii0 = Character("0").asciiValue!
+        var sign: Int8 = 1;
         var ret: Int8 = 0;
-        if self.count > 2 {
-            print(self.string)
-        }
         for val in self {
             if val == 45 {
-                ret = ret * -1
+                sign = -1
             } else {
                 ret = ret * 10 + Int8(val - ascii0)
             }
         }
-        return ret
+        return ret * sign
     }
 
     /*var asciiToInt: Int64 {
