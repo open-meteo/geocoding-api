@@ -143,4 +143,38 @@ final class geocoding_apiTests: XCTestCase {
         XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(2_000_000), 1.0)
         XCTAssertEqual(GeocodingDatabase.Geonames.populationToRank(10_000_000), 1.0)
     }
+
+    func testAsciiToIntParsing() {
+        let zero = "0".data(using: .utf8)!
+        let neg8 = "-42".data(using: .utf8)!
+        let neg16 = "-233".data(using: .utf8)!
+        let neg32 = "-1234567".data(using: .utf8)!
+        let pos8 = "42".data(using: .utf8)!
+        let pos16 = "1234".data(using: .utf8)!
+        let pos32 = "1234567".data(using: .utf8)!
+
+        zero.withUnsafeBytes { ptr in
+            XCTAssertEqual(ptr.asciiToInt16, 0)
+            XCTAssertEqual(ptr.asciiToInt32, 0)
+            XCTAssertEqual(ptr.asciiToInt8, 0)
+        }
+        neg8.withUnsafeBytes { ptr in
+            XCTAssertEqual(ptr.asciiToInt8, -42)
+        }
+        neg16.withUnsafeBytes { ptr in
+            XCTAssertEqual(ptr.asciiToInt16, -233)
+        }
+        neg32.withUnsafeBytes { ptr in
+            XCTAssertEqual(ptr.asciiToInt32, -1_234_567)
+        }
+        pos8.withUnsafeBytes { ptr in
+            XCTAssertEqual(ptr.asciiToInt8, 42)
+        }
+        pos16.withUnsafeBytes { ptr in
+            XCTAssertEqual(ptr.asciiToInt16, 1234)
+        }
+        pos32.withUnsafeBytes { ptr in
+            XCTAssertEqual(ptr.asciiToInt32, 1_234_567)
+        }
+    }
 }
