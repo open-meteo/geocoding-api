@@ -1,7 +1,7 @@
 # ================================
 # Build image
 # ================================
-FROM swift:5.7.1-jammy as build
+FROM swift:6.2.4-jammy AS build
 WORKDIR /build
 
 # First just resolve dependencies.
@@ -11,16 +11,18 @@ WORKDIR /build
 COPY ./Package.* ./
 RUN swift package resolve
 
-# Copy entire repo into container
-COPY . .
+# Copy only files needed for package validation and compilation.
+COPY Sources ./Sources
+COPY Tests ./Tests
 
-# Compile with optimizations
-RUN swift build --enable-test-discovery -c release
+# Compile with optimizations.
+RUN swift build -c release --product Run \
+    && swift build -c release --product PrepareDatabase
 
 # ================================
 # Run image
 # ================================
-FROM swift:5.7.1-jammy-slim
+FROM swift:6.2.4-jammy-slim AS runtime-base
 
 # Create a vapor user and group with /app as its home directory
 RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app vapor
@@ -28,15 +30,31 @@ RUN useradd --user-group --create-home --system --skel /dev/null --home-dir /app
 # Switch to the new home directory
 WORKDIR /app
 
-# Copy build artifacts
-COPY --from=build --chown=vapor:vapor /build/.build/release /app
-COPY --from=build --chown=vapor:vapor /build/Resources /app/Resources
-COPY --from=build --chown=vapor:vapor /build/.build/release/*.resources /app/Resources/
-COPY --from=build --chown=vapor:vapor /build/Public /app/Public
+# Copy the executables
+COPY --from=build --chown=vapor:vapor /build/.build/release/Run /app/Run
+COPY --from=build --chown=vapor:vapor /build/.build/release/PrepareDatabase /app/PrepareDatabase
+
+# ================================
+# Data initialization image
+# ================================
+FROM runtime-base AS data-init
+
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip util-linux \
+    && rm -rf /var/lib/apt/lists/*
+COPY docker/prepare-data.sh /usr/local/bin/prepare-data
+
+ENTRYPOINT ["/usr/local/bin/prepare-data"]
+
+# ================================
+# API runtime image
+# ================================
+FROM runtime-base AS runtime
 
 # Ensure all further commands run as the vapor user
 USER vapor:vapor
 
 # Start the Vapor service when the image is run, default to listening on 8080 in production environment 
-ENTRYPOINT ["./app"]
+ENTRYPOINT ["./Run"]
 CMD ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]

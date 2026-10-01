@@ -1,20 +1,3 @@
-# Docker Compose file for Vapor
-#
-# Install Docker on your system to run and test
-# your Vapor app in a production-like environment.
-#
-# Note: This file is intended for testing and does not
-# implement best practices for a production deployment.
-#
-# Learn more: https://docs.docker.com/compose/reference/
-#
-#   Build images: docker-compose build
-#      Start app: docker-compose up open-meteo
-#   Run commands: docker-compose run open-meteo --help
-#       Stop all: docker-compose down (add -v to wipe data)
-#
-version: '3.7'
-
 volumes:
   db_data:
 
@@ -22,15 +5,29 @@ x-shared_environment: &shared_environment
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
 services:
-  open-meteo:
-    image: open-meteo:latest
-    volumes:
-      - db_data:/app/data
+  prepare-data:
+    image: open-meteo-geocoding-data-init:latest
     build:
       context: .
+      target: data-init
+    volumes:
+      - db_data:/app/data
+    environment:
+      GEONAMES_DUMP_URL: ${GEONAMES_DUMP_URL:-https://download.geonames.org/export/dump}
+    restart: "no"
+
+  open-meteo:
+    image: open-meteo:latest
+    build:
+      context: .
+      target: runtime
+    depends_on:
+      prepare-data:
+        condition: service_completed_successfully
+    volumes:
+      - db_data:/app/data
     environment:
       <<: *shared_environment
     ports:
       - '8080:8080'
-    user: '0'
     command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]

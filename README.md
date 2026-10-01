@@ -9,9 +9,36 @@ Todo:
 - GeoIP support + weighted results by distance
 - Coordinates proximity search
 
+## Docker
+
+Docker Compose downloads the required GeoNames source files, builds the geocoding database in a persistent volume, and starts the API after preparation succeeds:
+
+```bash
+docker compose up --build
+```
+
+On a fresh volume, database preparation requires at least 6 GB of memory and takes around 25 minutes on a CPU with two Skylake-class cores. Loading the generated database before the API starts serving requests takes roughly another 5 minutes. Preparation logs are available from the `prepare-data` service.
+
+The generated `database.bin` is stored in the `db_data` volume. Source archives and extracted text files are removed after a successful build. Later starts skip preparation and reuse the existing database:
+
+```bash
+docker compose down
+docker compose up
+```
+
+To refresh the database from the latest GeoNames dumps, stop the API, explicitly rerun preparation, and start it again:
+
+```bash
+docker compose stop open-meteo
+docker compose run --rm -e FORCE_REFRESH=1 prepare-data
+docker compose up -d open-meteo
+```
+
+Running `docker compose down -v` deletes the database volume. The next start will download the source files and rebuild the database from scratch. When running the image without Compose, mount a prepared database at `/app/data/database.bin`.
+
 
 ## Installation on ubuntu 20.04
-The standalone `geocodingapi` binary can run on any 64-bit linux with recent libc. Currently only basic installation instructions for ubuntu 22.04 are available. Later Docker and others can be provided.
+The standalone `geocodingapi` binary can run on any 64-bit linux with recent libc. Currently only basic installation instructions for ubuntu 22.04 are available.
 
 ```bash
 apt install zip
