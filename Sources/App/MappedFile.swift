@@ -32,6 +32,7 @@ enum MappedFileError: Error, CustomStringConvertible {
 }
 
 /// Owns an immutable, private memory mapping for the lifetime of the database.
+/// Writers must publish a replacement file, never truncate or mutate a mapped inode.
 final class MappedFile {
     let path: String
     let count: Int
@@ -77,7 +78,8 @@ final class MappedFile {
         if let address { _ = munmap(address, count) }
     }
 
-    func bytes(offset: UInt64, length: UInt64) throws -> UnsafeRawBufferPointer {
+    /// Validate once and return a range that keeps this mapping alive independently.
+    func bytes(offset: UInt64, length: UInt64) throws -> MappedBytes {
         guard
             offset <= UInt64(count),
             length <= UInt64(count) - offset,
@@ -86,9 +88,12 @@ final class MappedFile {
         else {
             throw MappedFileError.range(offset: offset, length: length, fileSize: count)
         }
-        return UnsafeRawBufferPointer(
-            start: address.map { UnsafeRawPointer($0).advanced(by: integerOffset) },
-            count: integerLength
+        return MappedBytes(
+            owner: self,
+            bytes: UnsafeRawBufferPointer(
+                start: address.map { UnsafeRawPointer($0).advanced(by: integerOffset) },
+                count: integerLength
+            )
         )
     }
 
@@ -104,5 +109,34 @@ final class MappedFile {
 
     private static func lastError() -> String {
         return String(cString: strerror(errno))
+    }
+}
+
+/// An immutable, validated range that retains its mapping, including after the
+/// file is unlinked or atomically replaced. Only MappedFile can construct one.
+/// Raw pointers stay private; borrowed spans cannot outlive this owner-backed value.
+struct MappedBytes {
+    private let owner: MappedFile
+    private let bytes: UnsafeRawBufferPointer
+
+    fileprivate init(owner: MappedFile, bytes: UnsafeRawBufferPointer) {
+        self.owner = owner
+        self.bytes = bytes
+    }
+
+    var count: Int { bytes.count }
+
+    var span: Span<UInt8> {
+        @_lifetime(borrow self)
+        // Borrowing self also keeps its stored mapping owner alive.
+        borrowing get { Span(_unsafeBytes: bytes) }
+    }
+
+    subscript(index: Int) -> UInt8 { span[index] }
+
+    func withSpan<Result>(
+        _ body: (borrowing Span<UInt8>) throws -> Result
+    ) rethrows -> Result {
+        try body(span)
     }
 }

@@ -130,7 +130,7 @@ struct DatabaseFileHeader {
             throw DatabaseFormatError.invalidHeader("file is shorter than the header")
         }
         let bytes = try mappedFile.bytes(offset: 0, length: UInt64(Self.encodedSize))
-        guard Array(bytes.prefix(Self.magic.count)) == Self.magic else {
+        guard Self.magic.indices.allSatisfy({ bytes[$0] == Self.magic[$0] }) else {
             throw DatabaseFormatError.invalidMagic
         }
         let version = bytes.readUInt32(at: 8)
@@ -247,20 +247,17 @@ struct DatabaseFileHeader {
 }
 
 struct MappedDatabaseSection {
-    private let owner: MappedFile
     let kind: DatabaseSectionKind
-    let bytes: UnsafeRawBufferPointer
+    let bytes: MappedBytes
     let count: Int
     let stride: Int
 
     init(
-        owner: MappedFile,
         kind: DatabaseSectionKind,
-        bytes: UnsafeRawBufferPointer,
+        bytes: MappedBytes,
         count: Int,
         stride: Int
     ) {
-        self.owner = owner
         self.kind = kind
         self.bytes = bytes
         self.count = count
@@ -270,9 +267,7 @@ struct MappedDatabaseSection {
     func withSpan<Result>(
         _ body: (borrowing Span<UInt8>) throws -> Result
     ) rethrows -> Result {
-        try withExtendedLifetime(owner) {
-            try body(Span(_unsafeBytes: bytes))
-        }
+        try bytes.withSpan(body)
     }
 
     func uint8(at index: Int) -> UInt8 {
@@ -306,6 +301,16 @@ struct MappedDatabaseSection {
         precondition(stride == 8 && index >= 0 && index < count)
         return withSpan { $0.readUInt64(at: index * stride) }
     }
+}
+
+extension MappedBytes {
+    func containsRange(offset: Int, length: Int) -> Bool {
+        span.containsRange(offset: offset, length: length)
+    }
+
+    func readUInt16(at offset: Int) -> UInt16 { span.readUInt16(at: offset) }
+    func readUInt32(at offset: Int) -> UInt32 { span.readUInt32(at: offset) }
+    func readUInt64(at offset: Int) -> UInt64 { span.readUInt64(at: offset) }
 }
 
 extension UnsafeRawBufferPointer {
@@ -348,6 +353,14 @@ extension UnsafeRawBufferPointer {
 }
 
 extension Span where Element == UInt8 {
+    func containsRange(offset: Int, length: Int) -> Bool {
+        offset >= 0 && length >= 0 && offset <= count && length <= count - offset
+    }
+
+    func decodedUTF8() -> String? {
+        withUnsafeBufferPointer { String(bytes: $0, encoding: .utf8) }
+    }
+
     @inline(__always)
     func readUInt16(at offset: Int) -> UInt16 {
         precondition(offset >= 0 && offset + 2 <= count)

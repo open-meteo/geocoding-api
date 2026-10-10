@@ -1,19 +1,19 @@
 import Foundation
 import Logging
-import XCTest
+import Testing
 
 @testable import App
 
-final class GeocodingDatabaseTests: XCTestCase {
+final class GeocodingDatabaseTests {
     private var temporaryDirectories = [URL]()
 
-    override func tearDownWithError() throws {
+    deinit {
         for directory in temporaryDirectories {
             try? FileManager.default.removeItem(at: directory)
         }
-        temporaryDirectories.removeAll()
     }
 
+    @Test
     func testBuildLoadSearchAndLocalizedResponse() async throws {
         let paths = try makeFixture(name: "primary")
         try await GeocodingDatabaseBuilder(
@@ -23,21 +23,21 @@ final class GeocodingDatabaseTests: XCTestCase {
         ).build()
 
         let database = try GeocodingDatabase(url: paths.databaseFile)
-        XCTAssertEqual(database.recordCount, 8)
-        XCTAssertEqual(database.header.maximumGeonameID, 220)
-        XCTAssertTrue(database.header.sections.values.allSatisfy { $0.offset % 4096 == 0 })
-        XCTAssertNotNil(database.header.sections[.administrativeAliasRecords])
-        XCTAssertNotNil(database.header.sections[.administrativeAliasStrings])
-        XCTAssertNotNil(database.header.sections[.administrativeAliasCandidates])
+        #expect(database.recordCount == 8)
+        #expect(database.header.maximumGeonameID == 220)
+        #expect(database.header.sections.values.allSatisfy { $0.offset % 4096 == 0 })
+        #expect(database.header.sections[.administrativeAliasRecords] != nil)
+        #expect(database.header.sections[.administrativeAliasStrings] != nil)
+        #expect(database.header.sections[.administrativeAliasCandidates] != nil)
 
-        let english = try XCTUnwrap(database.languageIDs["en"])
-        let german = try XCTUnwrap(database.languageIDs["de"])
-        let response = try XCTUnwrap(database.response(id: 120, languageID: german))
-        XCTAssertEqual(response.name, "Frühlingsfeld")
-        XCTAssertEqual(response.country, "Testland")
-        XCTAssertEqual(response.admin1, "Nordregion")
-        XCTAssertEqual(response.postcodes, ["1234"])
-        XCTAssertEqual(response.timezone, "Europe/Zurich")
+        let english = try #require(database.languageIDs["en"])
+        let german = try #require(database.languageIDs["de"])
+        let response = try #require(try database.response(id: 120, languageID: german))
+        #expect(response.name == "Frühlingsfeld")
+        #expect(response.country == "Testland")
+        #expect(response.admin1 == "Nordregion")
+        #expect(response.postcodes == ["1234"])
+        #expect(response.timezone == "Europe/Zurich")
 
         let exact = try database.searchIndex.search(
             "Springfield",
@@ -46,8 +46,8 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: nil,
             administrativeArea: nil
         )
-        XCTAssertEqual(exact.map(\.id), [120, 220, 121])
-        XCTAssertGreaterThan(exact[0].score, exact[1].score)
+        #expect(exact.map(\.id) == [120, 220, 121])
+        #expect(exact[0].score > exact[1].score)
 
         let prefix = try database.searchIndex.search(
             "Spring",
@@ -56,7 +56,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: "TL",
             administrativeArea: nil
         )
-        XCTAssertEqual(prefix.map(\.id), [120, 121])
+        #expect(prefix.map(\.id) == [120, 121])
 
         let germanSearch = try database.searchIndex.search(
             "Fruhl",
@@ -65,7 +65,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: nil,
             administrativeArea: nil
         )
-        XCTAssertEqual(germanSearch.map(\.id), [120])
+        #expect(germanSearch.map(\.id) == [120])
 
         let postcode = try database.searchIndex.search(
             "1234",
@@ -74,7 +74,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: nil,
             administrativeArea: nil
         )
-        XCTAssertEqual(postcode.map(\.id), [120])
+        #expect(postcode.map(\.id) == [120])
 
         let historic = try database.searchIndex.search(
             "Old Springfield",
@@ -83,7 +83,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: nil,
             administrativeArea: nil
         )
-        XCTAssertTrue(historic.isEmpty)
+        #expect(historic.isEmpty)
 
         let lookup = AdministrativeAreaResolver(database: database)
         let area = try lookup.resolve("NR", languageID: english, countryCode: "TL")
@@ -94,7 +94,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: nil,
             administrativeArea: area
         )
-        XCTAssertEqual(filtered.map(\.id), [120, 121])
+        #expect(filtered.map(\.id) == [120, 121])
 
         let filteredByCountryAndArea = try database.searchIndex.search(
             "Spring",
@@ -103,7 +103,7 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: "TL",
             administrativeArea: area
         )
-        XCTAssertEqual(filteredByCountryAndArea.map(\.id), [120, 121])
+        #expect(filteredByCountryAndArea.map(\.id) == [120, 121])
 
         let excludedByCountry = try database.searchIndex.search(
             "Spring",
@@ -112,9 +112,10 @@ final class GeocodingDatabaseTests: XCTestCase {
             countryCode: "OL",
             administrativeArea: area
         )
-        XCTAssertTrue(excludedByCountry.isEmpty)
+        #expect(excludedByCountry.isEmpty)
     }
 
+    @Test
     func testAdministrativeAreaResolution() async throws {
         let paths = try makeFixture(name: "administrative-areas")
         try await GeocodingDatabaseBuilder(
@@ -125,66 +126,52 @@ final class GeocodingDatabaseTests: XCTestCase {
 
         let database = try GeocodingDatabase(url: paths.databaseFile)
         let resolver = AdministrativeAreaResolver(database: database)
-        let english = try XCTUnwrap(database.languageIDs["en"])
-        let german = try XCTUnwrap(database.languageIDs["de"])
-        let french = try XCTUnwrap(database.languageIDs["fr"])
+        let english = try #require(database.languageIDs["en"])
+        let german = try #require(database.languageIDs["de"])
+        let french = try #require(database.languageIDs["fr"])
 
-        XCTAssertEqual(
-            try resolver.resolve("NR", languageID: english, countryCode: nil).admin1IDs,
-            [110]
-        )
-        XCTAssertTrue(
-            try resolver.resolve("NR", languageID: english, countryCode: "OL").isEmpty
-        )
-        XCTAssertEqual(
-            try resolver.resolve("TL", languageID: english, countryCode: nil).admin1IDs,
-            [210]
-        )
+        #expect(try resolver.resolve("NR", languageID: english, countryCode: nil).admin1IDs == [110])
+        #expect(try resolver.resolve("NR", languageID: english, countryCode: "OL").isEmpty)
+        #expect(try resolver.resolve("TL", languageID: english, countryCode: nil).admin1IDs == [210])
         let countryCodeCollision = try resolver.resolve(
             "TL",
             languageID: english,
             countryCode: "TL"
         )
-        XCTAssertTrue(countryCodeCollision.admin1IDs.isEmpty)
-        XCTAssertEqual(countryCodeCollision.countryCodes, ["TL"])
-        XCTAssertEqual(
+        #expect(countryCodeCollision.admin1IDs.isEmpty)
+        #expect(countryCodeCollision.countryCodes == ["TL"])
+        #expect(
             try resolver.resolve(
                 "Shared Region",
                 languageID: english,
                 countryCode: nil
-            ).admin1IDs,
-            [110, 210]
+            ).admin1IDs == [110, 210]
         )
-        XCTAssertEqual(
+        #expect(
             try resolver.resolve(
                 "Shared Region",
                 languageID: english,
                 countryCode: "TL"
-            ).admin1IDs,
-            [110]
+            ).admin1IDs == [110]
         )
-        XCTAssertEqual(
+        #expect(
             try resolver.resolve(
                 "Région commune",
                 languageID: french,
                 countryCode: nil
-            ).admin1IDs,
-            [110, 210]
+            ).admin1IDs == [110, 210]
         )
-        XCTAssertEqual(
+        #expect(
             try resolver.resolve(
                 "Republic of Testland",
                 languageID: german,
                 countryCode: nil
-            ).countryCodes,
-            ["TL"]
+            ).countryCodes == ["TL"]
         )
-        XCTAssertEqual(
-            try resolver.resolve("tl", languageID: english, countryCode: " tl ").countryCodes,
-            ["TL"]
-        )
+        #expect(try resolver.resolve("tl", languageID: english, countryCode: " tl ").countryCodes == ["TL"])
     }
 
+    @Test
     func testAllCountryFeatureCodesAreResolved() async throws {
         let featureCodes = ["PCLI", "PCLD", "PCLIX", "PCLS", "PCLF", "PCL"]
         let countryCodes = ["AA", "AB", "AC", "AD", "AE", "AF"]
@@ -227,11 +214,12 @@ final class GeocodingDatabaseTests: XCTestCase {
                 languageID: 0,
                 countryCode: countryCodes[offset].lowercased()
             )
-            XCTAssertEqual(resolution.countryCodes, [countryCodes[offset]])
-            XCTAssertTrue(resolution.admin1IDs.isEmpty)
+            #expect(resolution.countryCodes == [countryCodes[offset]])
+            #expect(resolution.admin1IDs.isEmpty)
         }
     }
 
+    @Test
     func testRadixPrefixBoundariesAndExactMatching() async throws {
         let paths = try makeFixture(name: "radix-boundaries")
         try await GeocodingDatabaseBuilder(
@@ -241,55 +229,51 @@ final class GeocodingDatabaseTests: XCTestCase {
         ).build()
 
         let database = try GeocodingDatabase(url: paths.databaseFile)
-        let english = try XCTUnwrap(database.languageIDs["en"])
-        let german = try XCTUnwrap(database.languageIDs["de"])
+        let english = try #require(database.languageIDs["en"])
+        let german = try #require(database.languageIDs["de"])
 
         // Ends inside a compressed edge.
-        XCTAssertEqual(
+        #expect(
             try database.searchIndex.search(
                 "Spr",
                 languageID: english,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.id),
-            [120, 220, 121]
+            ).map(\.id) == [120, 220, 121]
         )
 
         // Ends at an internal terminal and then below that terminal.
-        XCTAssertEqual(
+        #expect(
             try database.searchIndex.search(
                 "Springfield",
                 languageID: english,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.id),
-            [120, 220, 121]
+            ).map(\.id) == [120, 220, 121]
         )
-        XCTAssertEqual(
+        #expect(
             try database.searchIndex.search(
                 "Springfield G",
                 languageID: english,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.id),
-            [121]
+            ).map(\.id) == [121]
         )
 
         // A complete terminal leaf and a query extending beyond it.
-        XCTAssertEqual(
+        #expect(
             try database.searchIndex.search(
                 "Frühlingsfeld",
                 languageID: german,
                 count: 10,
                 countryCode: nil,
                 administrativeArea: nil
-            ).map(\.id),
-            [120]
+            ).map(\.id) == [120]
         )
-        XCTAssertTrue(
+        #expect(
             try database.searchIndex.search(
                 "Frühlingsfelder",
                 languageID: german,
@@ -300,7 +284,7 @@ final class GeocodingDatabaseTests: XCTestCase {
         )
 
         // One- and two-character queries retain exact-only behavior.
-        XCTAssertTrue(
+        #expect(
             try database.searchIndex.search(
                 "Sp",
                 languageID: english,
@@ -311,29 +295,32 @@ final class GeocodingDatabaseTests: XCTestCase {
         )
     }
 
+    @Test
     func testBuildIsDeterministic() async throws {
         let first = try makeFixture(name: "deterministic-a")
         let second = try makeFixture(name: "deterministic-b")
         let logger = Logger(label: "database-test")
         try await GeocodingDatabaseBuilder(logger: logger, paths: first).build()
         try await GeocodingDatabaseBuilder(logger: logger, paths: second).build()
-        XCTAssertEqual(
-            try Data(contentsOf: first.databaseFile),
-            try Data(contentsOf: second.databaseFile)
-        )
+        #expect(try Data(contentsOf: first.databaseFile) == Data(contentsOf: second.databaseFile))
     }
 
+    @Test
     func testRejectsInvalidHeader() throws {
         let directory = try makeTemporaryDirectory(name: "invalid")
         let file = directory.appendingPathComponent("database-v2.bin")
         try Data(repeating: 0, count: DatabaseFileHeader.encodedSize).write(to: file)
-        XCTAssertThrowsError(try GeocodingDatabase(url: file)) { error in
+        #expect {
+            try GeocodingDatabase(url: file)
+        } throws: { error in
             guard case DatabaseFormatError.invalidMagic = error else {
-                return XCTFail("Unexpected error: \(error)")
+                return false
             }
+            return true
         }
     }
 
+    @Test
     func testRejectsCorruptRadixEdge() async throws {
         let paths = try makeFixture(name: "corrupt-edge")
         try await GeocodingDatabaseBuilder(
@@ -354,13 +341,17 @@ final class GeocodingDatabaseTests: XCTestCase {
             .appendingPathComponent("corrupt-database-v2.bin")
         try contents.write(to: corruptFile)
 
-        XCTAssertThrowsError(try GeocodingDatabase(url: corruptFile)) { error in
+        #expect {
+            try GeocodingDatabase(url: corruptFile)
+        } throws: { error in
             guard case DatabaseFormatError.invalidSection(.searchEdges, _) = error else {
-                return XCTFail("Unexpected error: \(error)")
+                return false
             }
+            return true
         }
     }
 
+    @Test
     func testRejectsInvalidPostingAndAdministrativeAliasRanges() async throws {
         let paths = try makeFixture(name: "corrupt-structural-ranges")
         try await GeocodingDatabaseBuilder(
@@ -382,10 +373,13 @@ final class GeocodingDatabaseTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("corrupt-posting.bin")
         try corruptPosting.write(to: postingFile)
-        XCTAssertThrowsError(try GeocodingDatabase(url: postingFile)) { error in
+        #expect {
+            try GeocodingDatabase(url: postingFile)
+        } throws: { error in
             guard case DatabaseFormatError.invalidSection(.searchPostings, _) = error else {
-                return XCTFail("Unexpected error: \(error)")
+                return false
             }
+            return true
         }
 
         var corruptAlias = original
@@ -398,15 +392,18 @@ final class GeocodingDatabaseTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("corrupt-alias.bin")
         try corruptAlias.write(to: aliasFile)
-        XCTAssertThrowsError(try GeocodingDatabase(url: aliasFile)) { error in
+        #expect {
+            try GeocodingDatabase(url: aliasFile)
+        } throws: { error in
             guard
                 case DatabaseFormatError.invalidSection(
                     .administrativeAliasRecords,
                     _
                 ) = error
             else {
-                return XCTFail("Unexpected error: \(error)")
+                return false
             }
+            return true
         }
 
         var missingAliasSection = original
@@ -418,48 +415,52 @@ final class GeocodingDatabaseTests: XCTestCase {
             .deletingLastPathComponent()
             .appendingPathComponent("missing-alias-section.bin")
         try missingAliasSection.write(to: missingAliasFile)
-        XCTAssertThrowsError(
+        #expect {
             try GeocodingDatabase(url: missingAliasFile)
-        ) { error in
+        } throws: { error in
             guard
                 case DatabaseFormatError.missingSection(
                     .administrativeAliasCandidates
                 ) = error
             else {
-                return XCTFail("Unexpected error: \(error)")
+                return false
             }
+            return true
         }
     }
 
+    @Test
     func testXXHash64KnownVectors() {
         let empty = XXHash64()
-        XCTAssertEqual(empty.digest(), 0xef46_db37_51d8_e999)
+        #expect(empty.digest() == 0xef46_db37_51d8_e999)
 
         var hello = XXHash64()
         Array("hello".utf8).withUnsafeBytes {
             hello.update($0)
         }
-        XCTAssertEqual(hello.digest(), 0x26c7_827d_889f_6da3)
+        #expect(hello.digest() == 0x26c7_827d_889f_6da3)
     }
 
+    @Test
     func testPopulationRanking() {
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(0), 0)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(10), 0.038468935, accuracy: 1e-7)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(1_000), 0.03920805, accuracy: 1e-7)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(10_000), 0.046580374, accuracy: 1e-7)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(50_000), 0.09806819, accuracy: 1e-7)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(100_000), 0.22813433, accuracy: 1e-7)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(200_000), 0.6859223, accuracy: 1e-7)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(500_000), 0.9988663, accuracy: 1e-7)
-        XCTAssertEqual(GeoNamesRecordRules.populationRank(1_000_000), 1)
+        #expect(GeoNamesRecordRules.populationRank(0) == 0)
+        #expect(abs(GeoNamesRecordRules.populationRank(10) - 0.038468935) <= 1e-7)
+        #expect(abs(GeoNamesRecordRules.populationRank(1_000) - 0.03920805) <= 1e-7)
+        #expect(abs(GeoNamesRecordRules.populationRank(10_000) - 0.046580374) <= 1e-7)
+        #expect(abs(GeoNamesRecordRules.populationRank(50_000) - 0.09806819) <= 1e-7)
+        #expect(abs(GeoNamesRecordRules.populationRank(100_000) - 0.22813433) <= 1e-7)
+        #expect(abs(GeoNamesRecordRules.populationRank(200_000) - 0.6859223) <= 1e-7)
+        #expect(abs(GeoNamesRecordRules.populationRank(500_000) - 0.9988663) <= 1e-7)
+        #expect(GeoNamesRecordRules.populationRank(1_000_000) == 1)
     }
 
+    @Test
     func testQualifierStopsAtNextComma() {
         let parsed = GeocodingapiController.parseSearchName(
             " Springfield, Shared Region, TL "
         )
-        XCTAssertEqual(parsed.name, "Springfield")
-        XCTAssertEqual(parsed.areaName, "Shared Region")
+        #expect(parsed.name == "Springfield")
+        #expect(parsed.areaName == "Shared Region")
     }
 
     private func makeFixture(name: String) throws -> DatabaseBuildPaths {

@@ -214,31 +214,28 @@ private struct TopKResultHeap {
 }
 
 final class PackedRadixSearchIndex {
-    private let mappedFile: MappedFile
-    private let rowIDs: UnsafeRawBufferPointer
+    private let rowIDs: MappedBytes
     private let recordCount: Int
-    private let nodes: UnsafeRawBufferPointer
-    private let edges: UnsafeRawBufferPointer
-    private let labels: UnsafeRawBufferPointer
-    private let metadata: UnsafeRawBufferPointer
-    private let postings: UnsafeRawBufferPointer
-    private let globalTrees: UnsafeRawBufferPointer
-    private let countryBuckets: UnsafeRawBufferPointer
-    private let countryEntries: UnsafeRawBufferPointer
-    private let countryTrees: UnsafeRawBufferPointer
-    private let adminBuckets: UnsafeRawBufferPointer
-    private let adminEntries: UnsafeRawBufferPointer
-    private let adminTrees: UnsafeRawBufferPointer
+    private let nodes: MappedBytes
+    private let edges: MappedBytes
+    private let labels: MappedBytes
+    private let metadata: MappedBytes
+    private let postings: MappedBytes
+    private let globalTrees: MappedBytes
+    private let countryBuckets: MappedBytes
+    private let countryEntries: MappedBytes
+    private let countryTrees: MappedBytes
+    private let adminBuckets: MappedBytes
+    private let adminEntries: MappedBytes
+    private let adminTrees: MappedBytes
     private let roots: [RadixIndexRoot?]
     private let countryBucketCount: Int
     private let adminBucketCount: Int
 
     init(
-        mappedFile: MappedFile,
         header: DatabaseFileHeader,
-        sections: [DatabaseSectionKind: UnsafeRawBufferPointer]
+        sections: [DatabaseSectionKind: MappedBytes]
     ) throws {
-        self.mappedFile = mappedFile
         rowIDs = sections[.locations]!
         recordCount = Int(header.recordCount)
         nodes = sections[.searchNodes]!
@@ -302,7 +299,6 @@ final class PackedRadixSearchIndex {
         administrativeArea: AdministrativeAreaResolver.Resolution?,
         diagnostics: SearchDiagnostics? = nil
     ) throws -> [SearchHit] {
-        defer { withExtendedLifetime(mappedFile) {} }
         guard count > 0 else { return [] }
         let prepared = NormalizedSearchQuery(value)
         let normalized = prepared.text
@@ -781,7 +777,7 @@ final class PackedRadixSearchIndex {
         let tree = treeBytes(scope: path.scope)
         let offset = (Int(path.treeStart) + Int(node)) * PackedRadixIndexLayout.treeNodeStride
         let bound = PackedRadixIndexLayout.rankUpperBound(
-            bytes: tree,
+            bytes: tree.span,
             offset: offset,
             queryCharacters: queryCharacters,
             onlyExact: onlyExact
@@ -970,11 +966,11 @@ final class PackedRadixSearchIndex {
         return low
     }
 
-    private func entryBytes(scope: SearchFilterScope) -> UnsafeRawBufferPointer {
+    private func entryBytes(scope: SearchFilterScope) -> MappedBytes {
         return scope == .country ? countryEntries : adminEntries
     }
 
-    private func treeBytes(scope: SearchFilterScope) -> UnsafeRawBufferPointer {
+    private func treeBytes(scope: SearchFilterScope) -> MappedBytes {
         switch scope {
         case .global:
             return globalTrees

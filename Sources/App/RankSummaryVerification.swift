@@ -4,7 +4,7 @@ extension GeocodingDatabase {
     /// Recompute every leaf and parent. Range validation runs before this verifier.
     static func validateRankSummaries(
         header: DatabaseFileHeader,
-        sections: [DatabaseSectionKind: UnsafeRawBufferPointer],
+        sections: [DatabaseSectionKind: MappedBytes],
         mappedFile: MappedFile
     ) throws {
         let metadata = sections[.searchNameMetadata]!

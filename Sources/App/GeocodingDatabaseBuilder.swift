@@ -535,9 +535,6 @@ final class GeocodingDatabaseBuilder {
         let alternateStringsMap = try MappedFile(url: alternateStringsArtifact.url)
         let postcodeOffsetsMap = try MappedFile(url: postcodeOffsetsArtifact.url)
         let postcodeStringsMap = try MappedFile(url: postcodeStringsArtifact.url)
-        defer {
-            withExtendedLifetime((alternateRecordsMap, alternateStringsMap, postcodeOffsetsMap, postcodeStringsMap)) {}
-        }
         let alternateRecordBytes = try alternateRecordsMap.bytes(
             offset: 0,
             length: UInt64(alternateRecordsMap.count)
@@ -789,7 +786,7 @@ final class GeocodingDatabaseBuilder {
                     let languageID = alternateRecordBytes.readUInt16(at: record)
                     let offset = alternateRecordBytes.readUInt32(at: record + 2)
                     let alternateName = try stringBytes(
-                        in: alternateStringBytes,
+                        in: alternateStringBytes.span,
                         offset: offset,
                         section: .alternateStrings
                     )
@@ -797,7 +794,7 @@ final class GeocodingDatabaseBuilder {
                         try insertAdministrativeAlias(
                             aliasCandidate,
                             kind: isCountry ? .common : .abbreviation,
-                            bytes: Span(_unsafeBytes: alternateName)
+                            bytes: alternateName
                         )
                     } else if languageID == emptyLanguage
                         || languageID == englishLanguage
@@ -805,14 +802,14 @@ final class GeocodingDatabaseBuilder {
                         try insertAdministrativeAlias(
                             aliasCandidate,
                             kind: .common,
-                            bytes: Span(_unsafeBytes: alternateName)
+                            bytes: alternateName
                         )
                     } else {
                         try insertAdministrativeAlias(
                             aliasCandidate,
                             kind: .localized,
                             languageID: languageID,
-                            bytes: Span(_unsafeBytes: alternateName)
+                            bytes: alternateName
                         )
                     }
                 }
@@ -841,7 +838,7 @@ final class GeocodingDatabaseBuilder {
                     let languageID = alternateRecordBytes.readUInt16(at: record)
                     let offset = alternateRecordBytes.readUInt32(at: record + 2)
                     let alternateName = try stringBytes(
-                        in: alternateStringBytes,
+                        in: alternateStringBytes.span,
                         offset: offset,
                         section: .alternateStrings
                     )
@@ -850,7 +847,7 @@ final class GeocodingDatabaseBuilder {
                             throw GeoNamesImportError.tooManyLanguages
                         }
                         try emitSearchCandidate(
-                            bytes: Span(_unsafeBytes: alternateName),
+                            bytes: alternateName,
                             indexID: languageID + 1,
                             country: country,
                             admin1ID: admin1ID,
@@ -866,7 +863,7 @@ final class GeocodingDatabaseBuilder {
                         || languageID == icaoLanguage
                     {
                         try emitSearchCandidate(
-                            bytes: Span(_unsafeBytes: alternateName),
+                            bytes: alternateName,
                             indexID: 0,
                             country: country,
                             admin1ID: admin1ID,
@@ -881,12 +878,12 @@ final class GeocodingDatabaseBuilder {
                     let offsetIndex = Int(postcodeStart) + postcodeIndex
                     let offset = postcodeOffsetBytes.readUInt32(at: offsetIndex * 4)
                     let postcode = try stringBytes(
-                        in: postcodeStringBytes,
+                        in: postcodeStringBytes.span,
                         offset: offset,
                         section: .postcodeStrings
                     )
                     try emitSearchCandidate(
-                        bytes: Span(_unsafeBytes: postcode),
+                        bytes: postcode,
                         indexID: 0,
                         country: country,
                         admin1ID: admin1ID,
@@ -983,11 +980,12 @@ final class GeocodingDatabaseBuilder {
         }
     }
 
+    @_lifetime(copy pool)
     private func stringBytes(
-        in pool: UnsafeRawBufferPointer,
+        in pool: borrowing Span<UInt8>,
         offset: UInt32,
         section: DatabaseSectionKind
-    ) throws -> UnsafeRawBufferPointer {
+    ) throws -> Span<UInt8> {
         let position = Int(offset)
         guard position + 4 <= pool.count else {
             throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
@@ -996,9 +994,7 @@ final class GeocodingDatabaseBuilder {
         guard length <= pool.count - position - 4 else {
             throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
         }
-        return UnsafeRawBufferPointer(
-            rebasing: pool[position + 4..<position + 4 + length]
-        )
+        return pool.extracting(position + 4..<position + 4 + length)
     }
 
     private func writeDenseIDMap(_ values: [UInt32]) throws -> DatabaseSectionArtifact {

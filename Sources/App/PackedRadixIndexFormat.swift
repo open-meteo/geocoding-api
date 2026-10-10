@@ -43,7 +43,7 @@ enum PackedRadixIndexLayout {
     }
 
     static func rankUpperBound(
-        bytes: UnsafeRawBufferPointer,
+        bytes: borrowing Span<UInt8>,
         offset: Int,
         queryCharacters: Int,
         onlyExact: Bool

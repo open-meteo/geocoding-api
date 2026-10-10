@@ -34,7 +34,6 @@ struct AdministrativeAreaResolver: Sendable {
         languageID: UInt16,
         countryCode: String?
     ) throws -> Resolution {
-        defer { withExtendedLifetime(database) {} }
         let normalized = Self.normalize(value)
         let countryFilter = countryCode.flatMap(GeocodingDatabase.countryValue)
         if countryCode != nil, countryFilter == nil {
@@ -119,8 +118,8 @@ struct AdministrativeAreaResolver: Sendable {
             return nil
         }
 
-        let records = database.rawSection(.administrativeAliasRecords)
-        let candidates = database.rawSection(.administrativeAliasCandidates)
+        let records = database.sectionBytes(.administrativeAliasRecords)
+        let candidates = database.sectionBytes(.administrativeAliasCandidates)
         let offset = record * AdministrativeAliasIndexLayout.recordStride
         let start = Int(records.readUInt32(at: offset + 8))
         let count = Int(records.readUInt16(at: offset + 12))
@@ -158,8 +157,8 @@ struct AdministrativeAreaResolver: Sendable {
         languageID: UInt16,
         query: borrowing Span<UInt8>
     ) throws -> Int {
-        let records = database.rawSection(.administrativeAliasRecords)
-        let strings = database.rawSection(.administrativeAliasStrings)
+        let records = database.sectionBytes(.administrativeAliasRecords)
+        let strings = database.sectionBytes(.administrativeAliasStrings)
         let offset = index * AdministrativeAliasIndexLayout.recordStride
         let candidateKind = records[offset]
         if candidateKind != kind.rawValue {
@@ -177,11 +176,7 @@ struct AdministrativeAreaResolver: Sendable {
         guard strings.containsRange(offset: stringOffset + 4, length: length) else {
             throw DatabaseFormatError.invalidSection(.administrativeAliasStrings, "invalid alias string range")
         }
-        let candidate = UnsafeRawBufferPointer(
-            rebasing: strings[
-                stringOffset + 4..<stringOffset + 4 + length
-            ]
-        )
+        let candidate = strings.span.extracting(stringOffset + 4..<stringOffset + 4 + length)
         let commonCount = min(candidate.count, query.count)
         for byte in 0..<commonCount where candidate[byte] != query[byte] {
             return candidate[byte] < query[byte] ? -1 : 1

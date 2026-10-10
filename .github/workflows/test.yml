@@ -49,6 +49,4 @@ jobs:
     container: swift:6.4-jammy
     steps:
     - uses: actions/checkout@v7
-    - run: swift test --sanitize address --filter 'FormatTests|GeocodingDatabaseTests'
-      env:
-        ASAN_OPTIONS: detect_leaks=0
+    - run: swift test --sanitize address --disable-xctest

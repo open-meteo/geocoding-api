@@ -14,12 +14,12 @@ final class GeocodingDatabase: @unchecked Sendable {
     private let idToRow: MappedDatabaseSection
     private let locations: MappedDatabaseSection
 
-    private let canonicalStrings: UnsafeRawBufferPointer
-    private let alternateRecords: UnsafeRawBufferPointer
-    private let alternateStrings: UnsafeRawBufferPointer
+    private let canonicalStrings: MappedBytes
+    private let alternateRecords: MappedBytes
+    private let alternateStrings: MappedBytes
     private let postcodeOffsets: MappedDatabaseSection
-    private let postcodeStrings: UnsafeRawBufferPointer
-    private let rawSections: [DatabaseSectionKind: UnsafeRawBufferPointer]
+    private let postcodeStrings: MappedBytes
+    private let mappedSections: [DatabaseSectionKind: MappedBytes]
 
     let searchIndex: PackedRadixSearchIndex
 
@@ -58,7 +58,6 @@ final class GeocodingDatabase: @unchecked Sendable {
                 throw DatabaseFormatError.invalidSection(kind, "section is too large")
             }
             return MappedDatabaseSection(
-                owner: mappedFile,
                 kind: kind,
                 bytes: try mappedFile.bytes(
                     offset: descriptor.offset,
@@ -69,7 +68,7 @@ final class GeocodingDatabase: @unchecked Sendable {
             )
         }
 
-        func raw(_ kind: DatabaseSectionKind) throws -> UnsafeRawBufferPointer {
+        func raw(_ kind: DatabaseSectionKind) throws -> MappedBytes {
             guard let descriptor = header.sections[kind] else {
                 throw DatabaseFormatError.missingSection(kind)
             }
@@ -202,7 +201,7 @@ final class GeocodingDatabase: @unchecked Sendable {
                 languageCount: languages.count
             )
         }
-        let rawSections: [DatabaseSectionKind: UnsafeRawBufferPointer] = [
+        let mappedSections: [DatabaseSectionKind: MappedBytes] = [
             .locations: locations.bytes,
             .searchRoots: searchRoots.bytes,
             .searchNodes: searchNodes.bytes,
@@ -221,15 +220,14 @@ final class GeocodingDatabase: @unchecked Sendable {
             .administrativeAliasStrings: administrativeAliasStrings.bytes,
             .administrativeAliasCandidates: administrativeAliasCandidates.bytes,
         ]
-        self.rawSections = rawSections
+        self.mappedSections = mappedSections
         searchIndex = try PackedRadixSearchIndex(
-            mappedFile: mappedFile,
             header: header,
-            sections: rawSections
+            sections: mappedSections
         )
 
         func validateStringOffset(
-            pool: UnsafeRawBufferPointer,
+            pool: MappedBytes,
             offset: UInt32,
             section: DatabaseSectionKind
         ) throws {
@@ -242,7 +240,7 @@ final class GeocodingDatabase: @unchecked Sendable {
             }
             let length = Int(pool.readUInt32(at: position))
             guard length <= pool.count - position - 4,
-                String(bytes: pool[position + 4..<position + 4 + length], encoding: .utf8) != nil
+                pool.span.extracting(position + 4..<position + 4 + length).decodedUTF8() != nil
             else {
                 throw DatabaseFormatError.invalidStringOffset(
                     section: section,
@@ -255,7 +253,8 @@ final class GeocodingDatabase: @unchecked Sendable {
             mappedFile.releaseResidentPages()
             for descriptor in header.sections.values {
                 var hasher = XXHash64()
-                hasher.update(try mappedFile.bytes(offset: descriptor.offset, length: descriptor.length))
+                let bytes = try mappedFile.bytes(offset: descriptor.offset, length: descriptor.length)
+                hasher.update(bytes.span)
                 guard hasher.digest() == descriptor.hash else {
                     throw DatabaseFormatError.invalidSection(descriptor.kind, "checksum mismatch")
                 }
@@ -354,7 +353,7 @@ final class GeocodingDatabase: @unchecked Sendable {
                     )
                 }
             }
-            try Self.validateRankSummaries(header: header, sections: rawSections, mappedFile: mappedFile)
+            try Self.validateRankSummaries(header: header, sections: mappedSections, mappedFile: mappedFile)
             mappedFile.releaseResidentPages()
             for id in 0..<idToRow.count {
                 let row = idToRow.uint32(at: id)
@@ -382,8 +381,8 @@ final class GeocodingDatabase: @unchecked Sendable {
         return Int(header.recordCount)
     }
 
-    func rawSection(_ kind: DatabaseSectionKind) -> UnsafeRawBufferPointer {
-        return rawSections[kind]!
+    func sectionBytes(_ kind: DatabaseSectionKind) -> MappedBytes {
+        return mappedSections[kind]!
     }
 
     func sectionDescriptor(_ kind: DatabaseSectionKind) -> DatabaseSectionDescriptor {
@@ -581,7 +580,7 @@ final class GeocodingDatabase: @unchecked Sendable {
     }
 
     private func string(
-        pool: UnsafeRawBufferPointer,
+        pool: MappedBytes,
         offset: UInt32,
         section: DatabaseSectionKind
     ) throws -> String {
@@ -594,10 +593,7 @@ final class GeocodingDatabase: @unchecked Sendable {
             throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
         }
         guard
-            let value = String(
-                bytes: pool[position + 4..<position + 4 + length],
-                encoding: .utf8
-            )
+            let value = pool.span.extracting(position + 4..<position + 4 + length).decodedUTF8()
         else {
             throw DatabaseFormatError.invalidSection(section, "string is not valid UTF-8")
         }
@@ -605,7 +601,7 @@ final class GeocodingDatabase: @unchecked Sendable {
     }
 
     private static func decodeStringTable(
-        bytes: UnsafeRawBufferPointer,
+        bytes: MappedBytes,
         count: UInt64,
         kind: DatabaseSectionKind
     ) throws -> [String] {
@@ -625,10 +621,7 @@ final class GeocodingDatabase: @unchecked Sendable {
                 throw DatabaseFormatError.invalidSection(kind, "string exceeds table")
             }
             guard
-                let value = String(
-                    bytes: bytes[offset..<offset + length],
-                    encoding: .utf8
-                )
+                let value = bytes.span.extracting(offset..<offset + length).decodedUTF8()
             else {
                 throw DatabaseFormatError.invalidSection(kind, "invalid UTF-8")
             }
@@ -912,34 +905,31 @@ final class GeocodingDatabase: @unchecked Sendable {
         candidates: MappedDatabaseSection,
         languageCount: Int
     ) throws {
-        func stringBytes(offset: UInt32) throws -> UnsafeRawBufferPointer {
+        @_lifetime(copy pool)
+        func stringBytes(in pool: borrowing Span<UInt8>, offset: UInt32) throws -> Span<UInt8> {
             let position = Int(offset)
             guard
-                position <= strings.bytes.count,
-                strings.bytes.count - position >= 4
+                position <= pool.count,
+                pool.count - position >= 4
             else {
                 throw DatabaseFormatError.invalidStringOffset(
                     section: .administrativeAliasStrings,
                     offset: offset
                 )
             }
-            let length = Int(strings.bytes.readUInt32(at: position))
-            guard length <= strings.bytes.count - position - 4 else {
+            let length = Int(pool.readUInt32(at: position))
+            guard length <= pool.count - position - 4 else {
                 throw DatabaseFormatError.invalidStringOffset(
                     section: .administrativeAliasStrings,
                     offset: offset
                 )
             }
-            return UnsafeRawBufferPointer(
-                rebasing: strings.bytes[
-                    position + 4..<position + 4 + length
-                ]
-            )
+            return pool.extracting(position + 4..<position + 4 + length)
         }
 
         func compare(
-            _ lhs: UnsafeRawBufferPointer,
-            _ rhs: UnsafeRawBufferPointer
+            _ lhs: borrowing Span<UInt8>,
+            _ rhs: borrowing Span<UInt8>
         ) -> Int {
             for index in 0..<min(lhs.count, rhs.count) where lhs[index] != rhs[index] {
                 return lhs[index] < rhs[index] ? -1 : 1
@@ -952,7 +942,7 @@ final class GeocodingDatabase: @unchecked Sendable {
 
         var previousKind: UInt8?
         var previousLanguage: UInt16 = 0
-        var previousName: UnsafeRawBufferPointer?
+        var previousNameOffset: UInt32?
         for recordIndex in 0..<records.count {
             let offset = recordIndex * records.stride
             let rawKind = records.bytes[offset]
@@ -977,9 +967,8 @@ final class GeocodingDatabase: @unchecked Sendable {
                     "record \(recordIndex) has an invalid language"
                 )
             }
-            let name = try stringBytes(
-                offset: records.bytes.readUInt32(at: offset + 4)
-            )
+            let nameOffset = records.bytes.readUInt32(at: offset + 4)
+            let name = try stringBytes(in: strings.bytes.span, offset: nameOffset)
             let start = Int(records.bytes.readUInt32(at: offset + 8))
             let count = Int(records.bytes.readUInt16(at: offset + 12))
             guard
@@ -993,11 +982,11 @@ final class GeocodingDatabase: @unchecked Sendable {
                 )
             }
             if let previousKind {
-                let isOrdered =
+                let isOrdered = try
                     previousKind < rawKind
                     || (previousKind == rawKind && previousLanguage < language)
                     || (previousKind == rawKind && previousLanguage == language
-                        && compare(previousName!, name) < 0)
+                        && compare(try stringBytes(in: strings.bytes.span, offset: previousNameOffset!), name) < 0)
                 guard isOrdered else {
                     throw DatabaseFormatError.invalidSection(
                         .administrativeAliasRecords,
@@ -1007,7 +996,7 @@ final class GeocodingDatabase: @unchecked Sendable {
             }
             previousKind = rawKind
             previousLanguage = language
-            previousName = name
+            previousNameOffset = nameOffset
 
             var previousCandidate: (UInt32, UInt16)?
             for candidateIndex in start..<start + count {
