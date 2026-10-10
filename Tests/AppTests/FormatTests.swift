@@ -7,6 +7,22 @@ import Testing
 @Suite(.serialized)
 struct FormatTests {
     @Test
+    func signedASCIIIntegersPreserveTheirSign() {
+        for value: Int32 in [0, -42, -233, -1_234_567, 42, 1234, 1_234_567, .min, .max] {
+            Array(String(value).utf8).withUnsafeBufferPointer { bytes in
+                let parsed = Span(_unsafeElements: bytes).signedInteger
+                #expect(parsed == value)
+            }
+        }
+        for value: Int16 in [0, -42, -233, 42, 1234, .min, .max] {
+            Array(String(value).utf8).withUnsafeBufferPointer { bytes in
+                let parsed = Span(_unsafeElements: bytes).signedInt16
+                #expect(parsed == value)
+            }
+        }
+    }
+
+    @Test
     func alternatePreferenceAndSourceOrderArePreserved() async throws {
         let fixture = try DatabaseFixture(count: 4)
         defer { fixture.remove() }
