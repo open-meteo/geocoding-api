@@ -95,7 +95,6 @@ struct LengthBinnedRankBounds {
     }
 
     func append(to output: inout [UInt16]) {
-        output.reserveCapacity(output.count + PackedRadixIndexLayout.rankBinCount)
         for index in values.indices {
             output.append(values[index])
         }
