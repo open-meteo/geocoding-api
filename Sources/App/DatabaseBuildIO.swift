@@ -329,6 +329,20 @@ final class BufferedBinaryWriter {
         try flushIfNeeded()
     }
 
+    /// Encode a small fixed-layout record without allocating an owned Data value.
+    /// Zero initialization gives every reserved byte a deterministic encoding.
+    func writeRecord(
+        byteCount: Int,
+        _ encode: (UnsafeMutableRawBufferPointer) -> Void
+    ) throws {
+        precondition(byteCount > 0 && byteCount <= 64)
+        try withUnsafeTemporaryAllocation(byteCount: byteCount, alignment: 1) { bytes in
+            bytes.initializeMemory(as: UInt8.self, repeating: 0)
+            encode(bytes)
+            try write(UnsafeRawBufferPointer(bytes))
+        }
+    }
+
     func writeLengthPrefixed(_ value: String) throws -> UInt32 {
         let offset = try currentUInt32Offset()
         let bytes = Array(value.utf8)

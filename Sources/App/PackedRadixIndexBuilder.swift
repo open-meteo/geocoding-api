@@ -66,7 +66,11 @@ private final class CandidateRunCursor {
     private(set) var candidate: SearchNameCandidate?
 
     init(url: URL) throws {
-        reader = try BinaryRecordReader(url: url, headerSize: 24, lengthOffset: 20)
+        reader = try BinaryRecordReader(
+            url: url,
+            headerSize: SearchCandidateLayout.stride,
+            lengthOffset: SearchCandidateLayout.byteCount
+        )
         try advance()
     }
 
@@ -75,7 +79,7 @@ private final class CandidateRunCursor {
         _ body: (borrowing Span<UInt8>) throws -> Result
     ) rethrows -> Result {
         try record.withUnsafeBytes { bytes in
-            try body(Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: bytes[24...])))
+            try body(Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: bytes[SearchCandidateLayout.stride...])))
         }
     }
 
@@ -84,15 +88,15 @@ private final class CandidateRunCursor {
         self.record = record
         candidate = record.withUnsafeBytes { bytes in
             SearchNameCandidate(
-                indexID: bytes.readUInt16(at: 0),
-                country: bytes.readUInt16(at: 2),
-                admin1ID: bytes.readUInt32(at: 4),
-                row: bytes.readUInt32(at: 8),
-                ranking: Float(bitPattern: bytes.readUInt32(at: 12)),
-                sources: MatchSources(rawValue: bytes.readUInt16(at: 18)),
-                characterCount: bytes.readUInt16(at: 16),
-                nameOffset: 24,
-                nameLength: record.count - 24
+                indexID: bytes.readUInt16(at: SearchCandidateLayout.indexID),
+                country: bytes.readUInt16(at: SearchCandidateLayout.country),
+                admin1ID: bytes.readUInt32(at: SearchCandidateLayout.admin1ID),
+                row: bytes.readUInt32(at: SearchCandidateLayout.row),
+                ranking: Float(bitPattern: bytes.readUInt32(at: SearchCandidateLayout.rank)),
+                sources: MatchSources(rawValue: bytes.readUInt16(at: SearchCandidateLayout.sources)),
+                characterCount: bytes.readUInt16(at: SearchCandidateLayout.characterCount),
+                nameOffset: SearchCandidateLayout.stride,
+                nameLength: record.count - SearchCandidateLayout.stride
             )
         }
     }
@@ -183,12 +187,12 @@ private final class PackedRadixWriter {
         }
         let edge: SerializedRadixEdge
         if let terminal = node.terminalOrdinal, node.children.isEmpty {
-            guard terminal < 0x8000_0000 else {
+            guard terminal < RadixEdgeLayout.leafFlag else {
                 throw GeoNamesImportError.tooManyValues("names in one search index")
             }
             edge = SerializedRadixEdge(
                 label: [incoming],
-                childNode: terminal | 0x8000_0000,
+                childNode: terminal | RadixEdgeLayout.leafFlag,
                 subtreeFirst: terminal,
                 subtreeCount: 1
             )
@@ -235,11 +239,12 @@ private final class PackedRadixWriter {
             }
             let labelOffset = try labelWriter.currentUInt32Offset()
             try edge.label.withUnsafeBytes { try labelWriter.write($0) }
-            try edgeWriter.write(edge.childNode)
-            try edgeWriter.write(labelOffset)
-            try edgeWriter.write(labelLength)
-            try edgeWriter.write(firstByte)
-            try edgeWriter.write(UInt8(0))
+            try edgeWriter.writeRecord(byteCount: RadixEdgeLayout.stride) { bytes in
+                bytes.writeLittleEndian(edge.childNode, at: RadixEdgeLayout.child)
+                bytes.writeLittleEndian(labelOffset, at: RadixEdgeLayout.labelOffset)
+                bytes.writeLittleEndian(labelLength, at: RadixEdgeLayout.labelLength)
+                bytes.writeLittleEndian(firstByte, at: RadixEdgeLayout.firstByte)
+            }
             edgeCount += 1
         }
         guard let edgeCountCompact = UInt16(exactly: node.children.count) else {
@@ -258,11 +263,16 @@ private final class PackedRadixWriter {
             count += child.subtreeCount
         }
         let nodeID = nodeCount
-        try nodeWriter.write(firstEdge)
-        try nodeWriter.write(edgeCountCompact)
-        try nodeWriter.write(node.terminalOrdinal == nil ? UInt16(0) : UInt16(1))
-        try nodeWriter.write(first)
-        try nodeWriter.write(count)
+        try nodeWriter.writeRecord(byteCount: RadixNodeLayout.stride) { bytes in
+            bytes.writeLittleEndian(firstEdge, at: RadixNodeLayout.firstEdge)
+            bytes.writeLittleEndian(edgeCountCompact, at: RadixNodeLayout.edgeCount)
+            bytes.writeLittleEndian(
+                node.terminalOrdinal == nil ? 0 : RadixNodeLayout.terminalFlag,
+                at: RadixNodeLayout.flags
+            )
+            bytes.writeLittleEndian(first, at: RadixNodeLayout.subtreeFirst)
+            bytes.writeLittleEndian(count, at: RadixNodeLayout.subtreeCount)
+        }
         nodeCount += 1
         return (nodeID, first, count)
     }
@@ -377,11 +387,13 @@ private final class SearchIndexSectionWriter {
                 candidate.sources.formUnion(duplicate.sources)
                 pending = try next()
             }
-            try postingWriter.write(candidate.row)
-            try postingWriter.write(candidate.ranking)
-            try postingWriter.write(candidate.country)
-            try postingWriter.write(candidate.admin1ID)
-            try postingWriter.write(candidate.sources.rawValue)
+            try postingWriter.writeRecord(byteCount: SearchPostingLayout.stride) { bytes in
+                bytes.writeLittleEndian(candidate.row, at: SearchPostingLayout.row)
+                bytes.writeLittleEndian(candidate.ranking.bitPattern, at: SearchPostingLayout.rank)
+                bytes.writeLittleEndian(candidate.country, at: SearchPostingLayout.country)
+                bytes.writeLittleEndian(candidate.admin1ID, at: SearchPostingLayout.admin1ID)
+                bytes.writeLittleEndian(candidate.sources.rawValue, at: SearchPostingLayout.sources)
+            }
             postingCount += 1
             acceptedCount += 1
             if candidate.country != 0 {
@@ -397,10 +409,11 @@ private final class SearchIndexSectionWriter {
                 )
             }
         }
-        try metadataWriter.write(postingStart)
-        try metadataWriter.write(acceptedCount)
-        try metadataWriter.write(characterCount)
-        try metadataWriter.write(UInt16(0))
+        try metadataWriter.writeRecord(byteCount: NameMetadataLayout.stride) { bytes in
+            bytes.writeLittleEndian(postingStart, at: NameMetadataLayout.postingStart)
+            bytes.writeLittleEndian(acceptedCount, at: NameMetadataLayout.postingCount)
+            bytes.writeLittleEndian(characterCount, at: NameMetadataLayout.characterCount)
+        }
         metadataCount += 1
 
         try radix.add(name: name, ordinal: currentOrdinal)
@@ -456,13 +469,14 @@ private final class SearchIndexSectionWriter {
             nodeCount: &treeNodeCount
         )
         let rootNode = try radix.finishIndex()
-        try rootWriter.write(indexID)
-        try rootWriter.write(UInt16(0))
-        try rootWriter.write(rootNode)
-        try rootWriter.write(currentNameBase)
-        try rootWriter.write(currentOrdinal)
-        try rootWriter.write(treeStart)
-        try rootWriter.write(leafBase)
+        try rootWriter.writeRecord(byteCount: RadixRootLayout.stride) { bytes in
+            bytes.writeLittleEndian(indexID, at: RadixRootLayout.indexID)
+            bytes.writeLittleEndian(rootNode, at: RadixRootLayout.rootNode)
+            bytes.writeLittleEndian(currentNameBase, at: RadixRootLayout.nameBase)
+            bytes.writeLittleEndian(currentOrdinal, at: RadixRootLayout.nameCount)
+            bytes.writeLittleEndian(treeStart, at: RadixRootLayout.treeStart)
+            bytes.writeLittleEndian(leafBase, at: RadixRootLayout.treeLeafBase)
+        }
         currentIndex = nil
     }
 
@@ -474,11 +488,13 @@ private final class SearchIndexSectionWriter {
         nameOrdinal: UInt32,
         maximumRank: Float
     ) throws {
-        try writer.write(indexID)
-        try writer.write(characterCount)
-        try writer.write(area)
-        try writer.write(nameOrdinal)
-        try writer.write(maximumRank)
+        try writer.writeRecord(byteCount: OrdinalViewLayout.stride) { bytes in
+            bytes.writeLittleEndian(indexID, at: OrdinalViewLayout.indexID)
+            bytes.writeLittleEndian(characterCount, at: OrdinalViewLayout.characterCount)
+            bytes.writeLittleEndian(area, at: OrdinalViewLayout.area)
+            bytes.writeLittleEndian(nameOrdinal, at: OrdinalViewLayout.nameOrdinal)
+            bytes.writeLittleEndian(maximumRank.bitPattern, at: OrdinalViewLayout.maximumRank)
+        }
     }
 }
 
@@ -586,24 +602,30 @@ final class PackedRadixIndexBuilder {
             inputs: [source],
             workspace: workspace,
             label: "search",
-            headerSize: 24,
-            lengthOffset: 20,
+            headerSize: SearchCandidateLayout.stride,
+            lengthOffset: SearchCandidateLayout.byteCount,
             memoryBytes: memoryLimitBytes
         ) { lhs, rhs in
-            let leftID = lhs.readUInt16(at: 0)
-            let rightID = rhs.readUInt16(at: 0)
+            let leftID = lhs.readUInt16(at: SearchCandidateLayout.indexID)
+            let rightID = rhs.readUInt16(at: SearchCandidateLayout.indexID)
             if leftID != rightID { return leftID < rightID }
             let order = compareLexicographically(
-                Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: lhs[24...])),
-                Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: rhs[24...]))
+                Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: lhs[SearchCandidateLayout.stride...])),
+                Span(_unsafeBytes: UnsafeRawBufferPointer(rebasing: rhs[SearchCandidateLayout.stride...]))
             )
             if order != 0 { return order < 0 }
-            let leftRank = Float(bitPattern: lhs.readUInt32(at: 12))
-            let rightRank = Float(bitPattern: rhs.readUInt32(at: 12))
+            let leftRank = Float(bitPattern: lhs.readUInt32(at: SearchCandidateLayout.rank))
+            let rightRank = Float(bitPattern: rhs.readUInt32(at: SearchCandidateLayout.rank))
             if leftRank != rightRank { return leftRank > rightRank }
-            if lhs.readUInt32(at: 8) != rhs.readUInt32(at: 8) { return lhs.readUInt32(at: 8) < rhs.readUInt32(at: 8) }
-            if lhs.readUInt16(at: 2) != rhs.readUInt16(at: 2) { return lhs.readUInt16(at: 2) < rhs.readUInt16(at: 2) }
-            return lhs.readUInt32(at: 4) < rhs.readUInt32(at: 4)
+            if lhs.readUInt32(at: SearchCandidateLayout.row) != rhs.readUInt32(at: SearchCandidateLayout.row) {
+                return lhs.readUInt32(at: SearchCandidateLayout.row) < rhs.readUInt32(at: SearchCandidateLayout.row)
+            }
+            if lhs.readUInt16(at: SearchCandidateLayout.country) != rhs.readUInt16(at: SearchCandidateLayout.country) {
+                return lhs.readUInt16(at: SearchCandidateLayout.country)
+                    < rhs.readUInt16(at: SearchCandidateLayout.country)
+            }
+            return lhs.readUInt32(at: SearchCandidateLayout.admin1ID)
+                < rhs.readUInt32(at: SearchCandidateLayout.admin1ID)
         }
         try fileManager.removeItem(at: source)
         return run
@@ -659,23 +681,27 @@ final class PackedRadixIndexBuilder {
             inputs: partitions,
             workspace: workspace,
             label: "view-\(kind)",
-            headerSize: 16,
+            headerSize: OrdinalViewLayout.stride,
             memoryBytes: memoryLimitBytes
         ) { lhs, rhs in
-            if lhs.readUInt16(at: 0) != rhs.readUInt16(at: 0) { return lhs.readUInt16(at: 0) < rhs.readUInt16(at: 0) }
-            if lhs.readUInt32(at: 4) != rhs.readUInt32(at: 4) { return lhs.readUInt32(at: 4) < rhs.readUInt32(at: 4) }
-            return lhs.readUInt32(at: 8) < rhs.readUInt32(at: 8)
+            if lhs.readUInt16(at: OrdinalViewLayout.indexID) != rhs.readUInt16(at: OrdinalViewLayout.indexID) {
+                return lhs.readUInt16(at: OrdinalViewLayout.indexID) < rhs.readUInt16(at: OrdinalViewLayout.indexID)
+            }
+            if lhs.readUInt32(at: OrdinalViewLayout.area) != rhs.readUInt32(at: OrdinalViewLayout.area) {
+                return lhs.readUInt32(at: OrdinalViewLayout.area) < rhs.readUInt32(at: OrdinalViewLayout.area)
+            }
+            return lhs.readUInt32(at: OrdinalViewLayout.nameOrdinal) < rhs.readUInt32(at: OrdinalViewLayout.nameOrdinal)
         }
         for url in partitions { try fileManager.removeItem(at: url) }
-        let reader = try BinaryRecordReader(url: sorted, headerSize: 16)
+        let reader = try BinaryRecordReader(url: sorted, headerSize: OrdinalViewLayout.stride)
         func next() throws -> OrdinalViewRecord? {
             try reader.withNextRecord { bytes in
                 OrdinalViewRecord(
-                    indexID: bytes.readUInt16(at: 0),
-                    characterCount: bytes.readUInt16(at: 2),
-                    area: bytes.readUInt32(at: 4),
-                    nameOrdinal: bytes.readUInt32(at: 8),
-                    maximumRank: Float(bitPattern: bytes.readUInt32(at: 12))
+                    indexID: bytes.readUInt16(at: OrdinalViewLayout.indexID),
+                    characterCount: bytes.readUInt16(at: OrdinalViewLayout.characterCount),
+                    area: bytes.readUInt32(at: OrdinalViewLayout.area),
+                    nameOrdinal: bytes.readUInt32(at: OrdinalViewLayout.nameOrdinal),
+                    maximumRank: Float(bitPattern: bytes.readUInt32(at: OrdinalViewLayout.maximumRank))
                 )
             }
         }
@@ -688,10 +714,13 @@ final class PackedRadixIndexBuilder {
             var leafSummary = LengthBinnedRankBounds()
             var leafValues = [UInt16]()
             while let record = current, record.indexID == indexID, record.area == area {
-                try entryWriter.write(record.nameOrdinal)
-                try entryWriter.write(
-                    PackedRadixIndexLayout.encodeRankBound(record.maximumRank)
-                )
+                try entryWriter.writeRecord(byteCount: AreaEntryLayout.stride) { bytes in
+                    bytes.writeLittleEndian(record.nameOrdinal, at: AreaEntryLayout.nameOrdinal)
+                    bytes.writeLittleEndian(
+                        PackedRadixIndexLayout.encodeRankBound(record.maximumRank),
+                        at: AreaEntryLayout.rankBound
+                    )
+                }
                 entryCount += 1
                 leafSummary.insert(
                     rank: record.maximumRank,
@@ -734,14 +763,14 @@ final class PackedRadixIndexBuilder {
             $0.indexID != $1.indexID
                 ? $0.indexID < $1.indexID : $0.area < $1.area
         }) {
-            try bucketWriter.write(bucket.indexID)
-            try bucketWriter.write(UInt16(0))
-            try bucketWriter.write(bucket.area)
-            try bucketWriter.write(bucket.entryStart)
-            try bucketWriter.write(bucket.entryCount)
-            try bucketWriter.write(bucket.treeStart)
-            try bucketWriter.write(bucket.treeLeafBase)
-            try bucketWriter.write(UInt32(0))
+            try bucketWriter.writeRecord(byteCount: AreaBucketLayout.stride) { bytes in
+                bytes.writeLittleEndian(bucket.indexID, at: AreaBucketLayout.indexID)
+                bytes.writeLittleEndian(bucket.area, at: AreaBucketLayout.area)
+                bytes.writeLittleEndian(bucket.entryStart, at: AreaBucketLayout.entryStart)
+                bytes.writeLittleEndian(bucket.entryCount, at: AreaBucketLayout.entryCount)
+                bytes.writeLittleEndian(bucket.treeStart, at: AreaBucketLayout.treeStart)
+                bytes.writeLittleEndian(bucket.treeLeafBase, at: AreaBucketLayout.treeLeafBase)
+            }
         }
         return [
             try closeArtifact(

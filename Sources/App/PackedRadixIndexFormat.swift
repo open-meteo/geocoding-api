@@ -9,15 +9,16 @@ enum PackedRadixIndexLayout {
     static let emptyRankBound = UInt16.max
     static let rankScale: Float = 32_768
 
-    static let rootStride = 24
-    static let nodeStride = 16
-    static let edgeStride = 12
-    static let nameMetadataStride = 12
-    static let postingStride = 16
-    static let treeNodeStride = rankBinCount * 2
-    static let areaBucketStride = 28
-    static let areaEntryStride = 6
-    static let viewRecordStride = 16
+    static let rootStride = RadixRootLayout.stride
+    static let nodeStride = RadixNodeLayout.stride
+    static let edgeStride = RadixEdgeLayout.stride
+    static let nameMetadataStride = NameMetadataLayout.stride
+    static let postingStride = SearchPostingLayout.stride
+    static let rankBoundStride = 2
+    static let treeNodeStride = rankBinCount * rankBoundStride
+    static let areaBucketStride = AreaBucketLayout.stride
+    static let areaEntryStride = AreaEntryLayout.stride
+    static let viewRecordStride = OrdinalViewLayout.stride
 
     static func rankBin(characterCount: UInt16) -> Int {
         let value = Int(characterCount)
@@ -50,7 +51,7 @@ enum PackedRadixIndexLayout {
     ) -> Float {
         var result = -Float.infinity
         for index in 0..<rankBinCount {
-            let rank = decodeRankBound(bytes.readUInt16(at: offset + index * 2))
+            let rank = decodeRankBound(bytes.readUInt16(at: offset + index * rankBoundStride))
             guard rank.isFinite else {
                 continue
             }

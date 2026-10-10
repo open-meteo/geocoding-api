@@ -260,23 +260,26 @@ final class PackedRadixSearchIndex: Sendable {
         for index in 0..<count {
             let offset = index * PackedRadixIndexLayout.rootStride
             let root = RadixIndexRoot(
-                indexID: bytes.readUInt16(at: offset),
-                rootNode: bytes.readUInt32(at: offset + 4),
-                nameBase: bytes.readUInt32(at: offset + 8),
-                nameCount: bytes.readUInt32(at: offset + 12),
-                treeStart: bytes.readUInt32(at: offset + 16),
-                treeLeafBase: bytes.readUInt32(at: offset + 20)
+                indexID: bytes.readUInt16(at: offset + RadixRootLayout.indexID),
+                rootNode: bytes.readUInt32(at: offset + RadixRootLayout.rootNode),
+                nameBase: bytes.readUInt32(at: offset + RadixRootLayout.nameBase),
+                nameCount: bytes.readUInt32(at: offset + RadixRootLayout.nameCount),
+                treeStart: bytes.readUInt32(at: offset + RadixRootLayout.treeStart),
+                treeLeafBase: bytes.readUInt32(at: offset + RadixRootLayout.treeLeafBase)
             )
             let base = Int(root.nameBase)
             let names = Int(root.nameCount)
             let leaves = Int(root.treeLeafBase)
-            guard root.nameCount <= 0x7fff_ffff,
+            guard root.nameCount <= RadixEdgeLayout.childMask,
                 base <= metadata.count / PackedRadixIndexLayout.nameMetadataStride,
                 names <= metadata.count / PackedRadixIndexLayout.nameMetadataStride - base,
                 Int(root.rootNode) < nodes.count / PackedRadixIndexLayout.nodeStride,
                 leaves > 0, leaves & (leaves - 1) == 0,
-                leaves >= (names + 63) / 64,
-                globalTrees.containsRange(offset: Int(root.treeStart) * 24, length: leaves * 2 * 24)
+                leaves >= (names + PackedRadixIndexLayout.namesPerLeaf - 1) / PackedRadixIndexLayout.namesPerLeaf,
+                globalTrees.containsRange(
+                    offset: Int(root.treeStart) * PackedRadixIndexLayout.treeNodeStride,
+                    length: leaves * 2 * PackedRadixIndexLayout.treeNodeStride
+                )
             else { throw DatabaseFormatError.invalidSection(.searchRoots, "invalid root ranges") }
             decodedRoots.append(root)
         }
@@ -516,21 +519,21 @@ final class PackedRadixSearchIndex: Sendable {
                 throw DatabaseFormatError.invalidSection(.searchNodes, "invalid query node")
             }
             if queryOffset == query.count {
-                let first = nodes.readUInt32(at: nodeOffset + 8)
-                let count = nodes.readUInt32(at: nodeOffset + 12)
+                let first = nodes.readUInt32(at: nodeOffset + RadixNodeLayout.subtreeFirst)
+                let count = nodes.readUInt32(at: nodeOffset + RadixNodeLayout.subtreeCount)
                 guard first < root.nameCount, count <= root.nameCount - first else {
                     throw DatabaseFormatError.invalidSection(.searchNodes, "invalid query ordinal range")
                 }
                 let terminal =
-                    nodes.readUInt16(at: nodeOffset + 6) & 1 == 1
+                    nodes.readUInt16(at: nodeOffset + RadixNodeLayout.flags) & RadixNodeLayout.terminalFlag != 0
                     ? first : nil
                 return RadixPrefixMatch(
                     range: first..<first + count,
                     terminal: terminal
                 )
             }
-            let firstEdge = Int(nodes.readUInt32(at: nodeOffset))
-            let edgeCount = Int(nodes.readUInt16(at: nodeOffset + 4))
+            let firstEdge = Int(nodes.readUInt32(at: nodeOffset + RadixNodeLayout.firstEdge))
+            let edgeCount = Int(nodes.readUInt16(at: nodeOffset + RadixNodeLayout.edgeCount))
             guard
                 let edge = try findEdge(
                     first: firstEdge,
@@ -541,11 +544,11 @@ final class PackedRadixSearchIndex: Sendable {
                 return nil
             }
             let edgeOffset = edge * PackedRadixIndexLayout.edgeStride
-            let child = edges.readUInt32(at: edgeOffset)
-            let isLeaf = child & 0x8000_0000 != 0
-            let leafOrdinal = child & 0x7fff_ffff
-            let labelOffset = Int(edges.readUInt32(at: edgeOffset + 4))
-            let labelLength = Int(edges.readUInt16(at: edgeOffset + 8))
+            let child = edges.readUInt32(at: edgeOffset + RadixEdgeLayout.child)
+            let isLeaf = child & RadixEdgeLayout.leafFlag != 0
+            let leafOrdinal = child & RadixEdgeLayout.childMask
+            let labelOffset = Int(edges.readUInt32(at: edgeOffset + RadixEdgeLayout.labelOffset))
+            let labelLength = Int(edges.readUInt16(at: edgeOffset + RadixEdgeLayout.labelLength))
             guard labelLength > 0, labels.containsRange(offset: labelOffset, length: labelLength),
                 !isLeaf || leafOrdinal < root.nameCount
             else {
@@ -570,8 +573,8 @@ final class PackedRadixSearchIndex: Sendable {
                 guard nodes.containsRange(offset: childOffset, length: PackedRadixIndexLayout.nodeStride) else {
                     throw DatabaseFormatError.invalidSection(.searchNodes, "invalid edge child")
                 }
-                let first = nodes.readUInt32(at: childOffset + 8)
-                let count = nodes.readUInt32(at: childOffset + 12)
+                let first = nodes.readUInt32(at: childOffset + RadixNodeLayout.subtreeFirst)
+                let count = nodes.readUInt32(at: childOffset + RadixNodeLayout.subtreeCount)
                 guard first < root.nameCount, count <= root.nameCount - first else {
                     throw DatabaseFormatError.invalidSection(.searchNodes, "invalid child ordinal range")
                 }
@@ -607,7 +610,7 @@ final class PackedRadixSearchIndex: Sendable {
         }
         if count <= 8 {
             for index in first..<first + count {
-                let byte = edges[index * PackedRadixIndexLayout.edgeStride + 10]
+                let byte = edges[index * PackedRadixIndexLayout.edgeStride + RadixEdgeLayout.firstByte]
                 if byte == firstByte {
                     return index
                 }
@@ -621,7 +624,7 @@ final class PackedRadixSearchIndex: Sendable {
         var high = first + count
         while low < high {
             let middle = low + (high - low) / 2
-            let byte = edges[middle * PackedRadixIndexLayout.edgeStride + 10]
+            let byte = edges[middle * PackedRadixIndexLayout.edgeStride + RadixEdgeLayout.firstByte]
             if byte < firstByte {
                 low = middle + 1
             } else {
@@ -629,7 +632,7 @@ final class PackedRadixSearchIndex: Sendable {
             }
         }
         guard low < first + count,
-            edges[low * PackedRadixIndexLayout.edgeStride + 10] == firstByte
+            edges[low * PackedRadixIndexLayout.edgeStride + RadixEdgeLayout.firstByte] == firstByte
         else {
             return nil
         }
@@ -806,8 +809,10 @@ final class PackedRadixSearchIndex: Sendable {
             let maximumRank: Float?
             if let entries {
                 let offset = (Int(path.itemStart) + Int(item)) * PackedRadixIndexLayout.areaEntryStride
-                ordinal = entries.readUInt32(at: offset)
-                maximumRank = PackedRadixIndexLayout.decodeRankBound(entries.readUInt16(at: offset + 4))
+                ordinal = entries.readUInt32(at: offset + AreaEntryLayout.nameOrdinal)
+                maximumRank = PackedRadixIndexLayout.decodeRankBound(
+                    entries.readUInt16(at: offset + AreaEntryLayout.rankBound)
+                )
             } else {
                 ordinal = item
                 maximumRank = nil
@@ -816,7 +821,7 @@ final class PackedRadixSearchIndex: Sendable {
                 throw DatabaseFormatError.invalidSection(.searchNameMetadata, "invalid name ordinal")
             }
             let metadataOffset = (Int(path.root.nameBase) + Int(ordinal)) * PackedRadixIndexLayout.nameMetadataStride
-            let characterCount = Int(metadata.readUInt16(at: metadataOffset + 8))
+            let characterCount = Int(metadata.readUInt16(at: metadataOffset + NameMetadataLayout.characterCount))
             let boost = scoreBoost(
                 characterCount: characterCount,
                 queryCharacters: queryCharacters,
@@ -838,8 +843,8 @@ final class PackedRadixSearchIndex: Sendable {
         results: inout TopKResultHeap
     ) throws {
         results.diagnostics?.namesExamined += 1
-        let postingStart = Int(metadata.readUInt32(at: metadataOffset))
-        let postingCount = Int(metadata.readUInt32(at: metadataOffset + 4))
+        let postingStart = Int(metadata.readUInt32(at: metadataOffset + NameMetadataLayout.postingStart))
+        let postingCount = Int(metadata.readUInt32(at: metadataOffset + NameMetadataLayout.postingCount))
         guard
             postings.containsRange(
                 offset: postingStart * PackedRadixIndexLayout.postingStride,
@@ -853,8 +858,8 @@ final class PackedRadixSearchIndex: Sendable {
             results.diagnostics?.postingsExamined += 1
             let offset =
                 (postingStart + postingIndex) * PackedRadixIndexLayout.postingStride
-            let row = postings.readUInt32(at: offset)
-            let rank = Float(bitPattern: postings.readUInt32(at: offset + 4))
+            let row = postings.readUInt32(at: offset + SearchPostingLayout.row)
+            let rank = Float(bitPattern: postings.readUInt32(at: offset + SearchPostingLayout.rank))
             guard Int(row) < recordCount, rank.isFinite else {
                 throw DatabaseFormatError.invalidSection(.searchPostings, "invalid posting row or rank")
             }
@@ -863,12 +868,12 @@ final class PackedRadixSearchIndex: Sendable {
                 break
             }
             if let country,
-                postings.readUInt16(at: offset + 8) != country
+                postings.readUInt16(at: offset + SearchPostingLayout.country) != country
             {
                 results.diagnostics?.postingsRejectedByGeography += 1
                 continue
             }
-            if path.scope == .admin, postings.readUInt32(at: offset + 10) != path.area {
+            if path.scope == .admin, postings.readUInt32(at: offset + SearchPostingLayout.admin1ID) != path.area {
                 results.diagnostics?.postingsRejectedByGeography += 1
                 continue
             }
@@ -877,11 +882,11 @@ final class PackedRadixSearchIndex: Sendable {
                 row: row,
                 id: Int32(
                     bitPattern: rowIDs.readUInt32(
-                        at: rowIndex * LocationRecordView.stride
+                        at: rowIndex * LocationRecordLayout.stride + LocationRecordLayout.id
                     )
                 ),
                 score: score,
-                sources: MatchSources(rawValue: postings.readUInt16(at: offset + 14))
+                sources: MatchSources(rawValue: postings.readUInt16(at: offset + SearchPostingLayout.sources))
             )
         }
     }
@@ -906,8 +911,8 @@ final class PackedRadixSearchIndex: Sendable {
         while low < high {
             let middle = low + (high - low) / 2
             let offset = middle * PackedRadixIndexLayout.areaBucketStride
-            let candidateIndex = bytes.readUInt16(at: offset)
-            let candidateArea = bytes.readUInt32(at: offset + 4)
+            let candidateIndex = bytes.readUInt16(at: offset + AreaBucketLayout.indexID)
+            let candidateArea = bytes.readUInt32(at: offset + AreaBucketLayout.area)
             if candidateIndex < indexID
                 || (candidateIndex == indexID && candidateArea < area)
             {
@@ -921,26 +926,33 @@ final class PackedRadixSearchIndex: Sendable {
         }
         let offset = low * PackedRadixIndexLayout.areaBucketStride
         guard
-            bytes.readUInt16(at: offset) == indexID,
-            bytes.readUInt32(at: offset + 4) == area
+            bytes.readUInt16(at: offset + AreaBucketLayout.indexID) == indexID,
+            bytes.readUInt32(at: offset + AreaBucketLayout.area) == area
         else {
             return nil
         }
         let bucket = AreaOrdinalView(
             indexID: indexID,
             area: area,
-            entryStart: bytes.readUInt32(at: offset + 8),
-            entryCount: bytes.readUInt32(at: offset + 12),
-            treeStart: bytes.readUInt32(at: offset + 16),
-            treeLeafBase: bytes.readUInt32(at: offset + 20)
+            entryStart: bytes.readUInt32(at: offset + AreaBucketLayout.entryStart),
+            entryCount: bytes.readUInt32(at: offset + AreaBucketLayout.entryCount),
+            treeStart: bytes.readUInt32(at: offset + AreaBucketLayout.treeStart),
+            treeLeafBase: bytes.readUInt32(at: offset + AreaBucketLayout.treeLeafBase)
         )
         let start = Int(bucket.entryStart)
         let items = Int(bucket.entryCount)
         let leaves = Int(bucket.treeLeafBase)
-        guard bucket.entryCount <= 0x7fff_ffff,
-            entryBytes(scope: scope).containsRange(offset: start * 6, length: items * 6),
-            leaves > 0, leaves & (leaves - 1) == 0, leaves >= (items + 63) / 64,
-            treeBytes(scope: scope).containsRange(offset: Int(bucket.treeStart) * 24, length: leaves * 2 * 24)
+        guard bucket.entryCount <= RadixEdgeLayout.childMask,
+            entryBytes(scope: scope).containsRange(
+                offset: start * AreaEntryLayout.stride,
+                length: items * AreaEntryLayout.stride
+            ),
+            leaves > 0, leaves & (leaves - 1) == 0,
+            leaves >= (items + PackedRadixIndexLayout.namesPerLeaf - 1) / PackedRadixIndexLayout.namesPerLeaf,
+            treeBytes(scope: scope).containsRange(
+                offset: Int(bucket.treeStart) * PackedRadixIndexLayout.treeNodeStride,
+                length: leaves * 2 * PackedRadixIndexLayout.treeNodeStride
+            )
         else { throw DatabaseFormatError.invalidSection(.searchCountryBuckets, "invalid area view") }
         return bucket
     }
@@ -957,7 +969,7 @@ final class PackedRadixSearchIndex: Sendable {
             let middle = low + (high - low) / 2
             let offset =
                 (Int(bucket.entryStart) + Int(middle)) * PackedRadixIndexLayout.areaEntryStride
-            if bytes.readUInt32(at: offset) < ordinal {
+            if bytes.readUInt32(at: offset + AreaEntryLayout.nameOrdinal) < ordinal {
                 low = middle + 1
             } else {
                 high = middle

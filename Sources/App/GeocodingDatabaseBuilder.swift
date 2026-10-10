@@ -374,12 +374,14 @@ final class GeocodingDatabaseBuilder {
                 preference = 1
             }
             let writer = inputWriter
-            try writer.write(initial.idToRow[Int(id)])
-            try writer.write(languageID)
-            try writer.write(isPostcode ? UInt8(1) : UInt8(0))
-            try writer.write(preference)
-            try writer.write(UInt32(name.count))
-            try writer.write(UInt64(lineNumber))
+            try writer.writeRecord(byteCount: AlternateInputLayout.stride) { bytes in
+                bytes.writeLittleEndian(initial.idToRow[Int(id)], at: AlternateInputLayout.row)
+                bytes.writeLittleEndian(languageID, at: AlternateInputLayout.languageID)
+                bytes.writeLittleEndian(isPostcode ? UInt8(1) : UInt8(0), at: AlternateInputLayout.kind)
+                bytes.writeLittleEndian(preference, at: AlternateInputLayout.preference)
+                bytes.writeLittleEndian(UInt32(name.count), at: AlternateInputLayout.byteCount)
+                bytes.writeLittleEndian(UInt64(lineNumber), at: AlternateInputLayout.sourceOrder)
+            }
             try writer.write(name)
         }
         _ = try inputWriter.close()
@@ -387,19 +389,29 @@ final class GeocodingDatabaseBuilder {
             inputs: [unsorted],
             workspace: workspace,
             label: "alternate",
-            headerSize: 20,
-            lengthOffset: 8,
+            headerSize: AlternateInputLayout.stride,
+            lengthOffset: AlternateInputLayout.byteCount,
             memoryBytes: options.memoryLimitBytes - initial.managedBytes
         ) { lhs, rhs in
-            if lhs.readUInt32(at: 0) != rhs.readUInt32(at: 0) { return lhs.readUInt32(at: 0) < rhs.readUInt32(at: 0) }
-            if lhs[6] != rhs[6] { return lhs[6] < rhs[6] }
-            if lhs[6] == 0 {
-                if lhs.readUInt16(at: 4) != rhs.readUInt16(at: 4) {
-                    return lhs.readUInt16(at: 4) < rhs.readUInt16(at: 4)
-                }
-                if lhs[7] != rhs[7] { return lhs[7] > rhs[7] }
+            if lhs.readUInt32(at: AlternateInputLayout.row) != rhs.readUInt32(at: AlternateInputLayout.row) {
+                return lhs.readUInt32(at: AlternateInputLayout.row) < rhs.readUInt32(at: AlternateInputLayout.row)
             }
-            return lhs.readUInt64(at: 12) < rhs.readUInt64(at: 12)
+            if lhs[AlternateInputLayout.kind] != rhs[AlternateInputLayout.kind] {
+                return lhs[AlternateInputLayout.kind] < rhs[AlternateInputLayout.kind]
+            }
+            if lhs[AlternateInputLayout.kind] == 0 {
+                if lhs.readUInt16(at: AlternateInputLayout.languageID)
+                    != rhs.readUInt16(at: AlternateInputLayout.languageID)
+                {
+                    return lhs.readUInt16(at: AlternateInputLayout.languageID)
+                        < rhs.readUInt16(at: AlternateInputLayout.languageID)
+                }
+                if lhs[AlternateInputLayout.preference] != rhs[AlternateInputLayout.preference] {
+                    return lhs[AlternateInputLayout.preference] > rhs[AlternateInputLayout.preference]
+                }
+            }
+            return lhs.readUInt64(at: AlternateInputLayout.sourceOrder)
+                < rhs.readUInt64(at: AlternateInputLayout.sourceOrder)
         }
         try fileManager.removeItem(at: unsorted)
         let rows = Int(initial.recordCount)
@@ -419,13 +431,17 @@ final class GeocodingDatabaseBuilder {
         var alternateRecordCount: UInt32 = 0
         var postcodeRecordCount: UInt32 = 0
 
-        let sortedReader = try BinaryRecordReader(url: sorted, headerSize: 20, lengthOffset: 8)
+        let sortedReader = try BinaryRecordReader(
+            url: sorted,
+            headerSize: AlternateInputLayout.stride,
+            lengthOffset: AlternateInputLayout.byteCount
+        )
         var previousAlternate: UInt64?
         while try sortedReader.withNextRecord({ bytes -> Void in
-            let row = Int(bytes.readUInt32(at: 0))
-            let language = bytes.readUInt16(at: 4)
+            let row = Int(bytes.readUInt32(at: AlternateInputLayout.row))
+            let language = bytes.readUInt16(at: AlternateInputLayout.languageID)
             let key = UInt64(row) << 16 | UInt64(language)
-            if bytes[6] == 0 {
+            if bytes[AlternateInputLayout.kind] == 0 {
                 guard previousAlternate != key else { return }
                 previousAlternate = key
                 guard alternateCounts[row] < UInt16.max else {
@@ -434,18 +450,20 @@ final class GeocodingDatabaseBuilder {
                 if alternateCounts[row] == 0 { alternateStarts[row] = alternateRecordCount }
                 alternateCounts[row] += 1
                 let offset = try alternateStrings.currentUInt32Offset()
-                try alternateStrings.write(UInt32(bytes.count - 20))
-                try alternateStrings.write(bytes.extracting(20...))
-                try alternateRecords.write(language)
-                try alternateRecords.write(offset)
+                try alternateStrings.write(UInt32(bytes.count - AlternateInputLayout.stride))
+                try alternateStrings.write(bytes.extracting(AlternateInputLayout.stride...))
+                try alternateRecords.writeRecord(byteCount: AlternateNameRecordLayout.stride) { bytes in
+                    bytes.writeLittleEndian(language, at: AlternateNameRecordLayout.languageID)
+                    bytes.writeLittleEndian(offset, at: AlternateNameRecordLayout.nameOffset)
+                }
                 alternateRecordCount += 1
             } else {
                 guard postcodeCounts[row] < UInt16.max else { throw GeoNamesImportError.tooManyValues("postcodes") }
                 if postcodeCounts[row] == 0 { postcodeStarts[row] = postcodeRecordCount }
                 postcodeCounts[row] += 1
                 let offset = try postcodeStrings.currentUInt32Offset()
-                try postcodeStrings.write(UInt32(bytes.count - 20))
-                try postcodeStrings.write(bytes.extracting(20...))
+                try postcodeStrings.write(UInt32(bytes.count - AlternateInputLayout.stride))
+                try postcodeStrings.write(bytes.extracting(AlternateInputLayout.stride...))
                 try postcodeOffsets.write(offset)
                 postcodeRecordCount += 1
             }
@@ -462,7 +480,7 @@ final class GeocodingDatabaseBuilder {
                 url: alternateRecordsURL,
                 length: alternateRecordsResult.length,
                 count: UInt64(alternateRecordCount),
-                stride: 6,
+                stride: UInt32(AlternateNameRecordLayout.stride),
                 hash: alternateRecordsResult.hash
             ),
             DatabaseSectionArtifact(
@@ -745,26 +763,26 @@ final class GeocodingDatabaseBuilder {
             guard idToRow[Int(id)] == row else {
                 throw DatabaseFormatError.invalidSection(.locations, "source IDs changed between passes")
             }
-            try locationWriter.write(id)
-            try locationWriter.write(latitude)
-            try locationWriter.write(longitude)
-            try locationWriter.write(population)
-            try locationWriter.write(initial.countries[country] ?? 0)
-            try locationWriter.write(admin1ID)
-            try locationWriter.write(admin2ID)
-            try locationWriter.write(admin3ID)
-            try locationWriter.write(admin4ID)
-            try locationWriter.write(nameOffset)
-            try locationWriter.write(alternateStart)
-            try locationWriter.write(postcodeStart)
-            try locationWriter.write(elevation)
-            try locationWriter.write(timezone)
-            try locationWriter.write(country)
-            try locationWriter.write(alternateCount)
-            try locationWriter.write(postcodeCount)
-            try locationWriter.write(featureIndex)
-            try locationWriter.write(UInt8(0))
-            try locationWriter.write(UInt32(0))
+            try locationWriter.writeRecord(byteCount: LocationRecordLayout.stride) { bytes in
+                bytes.writeLittleEndian(id, at: LocationRecordLayout.id)
+                bytes.writeLittleEndian(latitude.bitPattern, at: LocationRecordLayout.latitude)
+                bytes.writeLittleEndian(longitude.bitPattern, at: LocationRecordLayout.longitude)
+                bytes.writeLittleEndian(population, at: LocationRecordLayout.population)
+                bytes.writeLittleEndian(initial.countries[country] ?? 0, at: LocationRecordLayout.countryID)
+                bytes.writeLittleEndian(admin1ID, at: LocationRecordLayout.admin1ID)
+                bytes.writeLittleEndian(admin2ID, at: LocationRecordLayout.admin2ID)
+                bytes.writeLittleEndian(admin3ID, at: LocationRecordLayout.admin3ID)
+                bytes.writeLittleEndian(admin4ID, at: LocationRecordLayout.admin4ID)
+                bytes.writeLittleEndian(nameOffset, at: LocationRecordLayout.nameOffset)
+                bytes.writeLittleEndian(alternateStart, at: LocationRecordLayout.alternateStart)
+                bytes.writeLittleEndian(postcodeStart, at: LocationRecordLayout.postcodeStart)
+                bytes.writeLittleEndian(elevation, at: LocationRecordLayout.elevation)
+                bytes.writeLittleEndian(timezone, at: LocationRecordLayout.timezone)
+                bytes.writeLittleEndian(country, at: LocationRecordLayout.country)
+                bytes.writeLittleEndian(alternateCount, at: LocationRecordLayout.alternateCount)
+                bytes.writeLittleEndian(postcodeCount, at: LocationRecordLayout.postcodeCount)
+                bytes.writeLittleEndian(featureIndex, at: LocationRecordLayout.feature)
+            }
 
             let isCountry = GeoNamesRecordRules.isCountry(
                 featureIndex: featureIndex
@@ -780,9 +798,9 @@ final class GeocodingDatabaseBuilder {
                     bytes: name
                 )
                 for alternateIndex in 0..<Int(alternateCount) {
-                    let record = (Int(alternateStart) + alternateIndex) * 6
-                    let languageID = alternateRecordBytes.readUInt16(at: record)
-                    let offset = alternateRecordBytes.readUInt32(at: record + 2)
+                    let record = (Int(alternateStart) + alternateIndex) * AlternateNameRecordLayout.stride
+                    let languageID = alternateRecordBytes.readUInt16(at: record + AlternateNameRecordLayout.languageID)
+                    let offset = alternateRecordBytes.readUInt32(at: record + AlternateNameRecordLayout.nameOffset)
                     let alternateName = try stringBytes(
                         in: alternateStringBytes.span,
                         offset: offset,
@@ -832,9 +850,9 @@ final class GeocodingDatabaseBuilder {
                     writer: searchWriter
                 )
                 for alternateIndex in 0..<Int(alternateCount) {
-                    let record = (Int(alternateStart) + alternateIndex) * 6
-                    let languageID = alternateRecordBytes.readUInt16(at: record)
-                    let offset = alternateRecordBytes.readUInt32(at: record + 2)
+                    let record = (Int(alternateStart) + alternateIndex) * AlternateNameRecordLayout.stride
+                    let languageID = alternateRecordBytes.readUInt16(at: record + AlternateNameRecordLayout.languageID)
+                    let offset = alternateRecordBytes.readUInt32(at: record + AlternateNameRecordLayout.nameOffset)
                     let alternateName = try stringBytes(
                         in: alternateStringBytes.span,
                         offset: offset,
@@ -911,7 +929,7 @@ final class GeocodingDatabaseBuilder {
                 url: locationWriter.url,
                 length: locationResult.length,
                 count: UInt64(initial.recordCount),
-                stride: 64,
+                stride: UInt32(LocationRecordLayout.stride),
                 hash: locationResult.hash
             )
         )
@@ -964,14 +982,16 @@ final class GeocodingDatabaseBuilder {
         else {
             throw GeoNamesImportError.tooManyValues("characters in a search name")
         }
-        try writer.write(indexID)
-        try writer.write(country)
-        try writer.write(admin1ID)
-        try writer.write(row)
-        try writer.write(ranking)
-        try writer.write(characterCount)
-        try writer.write(sources.rawValue)
-        try writer.write(byteCount)
+        try writer.writeRecord(byteCount: SearchCandidateLayout.stride) { bytes in
+            bytes.writeLittleEndian(indexID, at: SearchCandidateLayout.indexID)
+            bytes.writeLittleEndian(country, at: SearchCandidateLayout.country)
+            bytes.writeLittleEndian(UInt32(bitPattern: admin1ID), at: SearchCandidateLayout.admin1ID)
+            bytes.writeLittleEndian(row, at: SearchCandidateLayout.row)
+            bytes.writeLittleEndian(ranking.bitPattern, at: SearchCandidateLayout.rank)
+            bytes.writeLittleEndian(characterCount, at: SearchCandidateLayout.characterCount)
+            bytes.writeLittleEndian(sources.rawValue, at: SearchCandidateLayout.sources)
+            bytes.writeLittleEndian(byteCount, at: SearchCandidateLayout.byteCount)
+        }
         let normalizedBytes = Array(normalized.utf8)
         try normalizedBytes.withUnsafeBytes {
             try writer.write($0)
@@ -1077,17 +1097,18 @@ final class GeocodingDatabaseBuilder {
                     "administrative-area alias candidates"
                 )
             }
-            try records.write(key.kind.rawValue)
-            try records.write(UInt8(0))
-            try records.write(key.languageID)
-            try records.write(nameOffset)
-            try records.write(candidateCount)
-            try records.write(compactCount)
-            try records.write(UInt16(0))
+            try records.writeRecord(byteCount: AdministrativeAliasRecordLayout.stride) { bytes in
+                bytes.writeLittleEndian(key.kind.rawValue, at: AdministrativeAliasRecordLayout.kind)
+                bytes.writeLittleEndian(key.languageID, at: AdministrativeAliasRecordLayout.languageID)
+                bytes.writeLittleEndian(nameOffset, at: AdministrativeAliasRecordLayout.nameOffset)
+                bytes.writeLittleEndian(candidateCount, at: AdministrativeAliasRecordLayout.candidateStart)
+                bytes.writeLittleEndian(compactCount, at: AdministrativeAliasRecordLayout.candidateCount)
+            }
             for value in values {
-                try candidates.write(value.admin1ID)
-                try candidates.write(value.country)
-                try candidates.write(UInt16(0))
+                try candidates.writeRecord(byteCount: AdministrativeAliasCandidateLayout.stride) { bytes in
+                    bytes.writeLittleEndian(value.admin1ID, at: AdministrativeAliasCandidateLayout.admin1ID)
+                    bytes.writeLittleEndian(value.country, at: AdministrativeAliasCandidateLayout.country)
+                }
                 candidateCount += 1
             }
         }
@@ -1175,7 +1196,8 @@ final class GeocodingDatabaseBuilder {
         var descriptors = [DatabaseSectionDescriptor]()
 
         for artifact in artifacts.sorted(by: { $0.kind.rawValue < $1.kind.rawValue }) {
-            let aligned = (currentOffset + 4095) & ~UInt64(4095)
+            let alignmentMask = DatabaseFileHeader.sectionAlignment - 1
+            let aligned = (currentOffset + alignmentMask) & ~alignmentMask
             if aligned > currentOffset {
                 try handle.write(
                     contentsOf: Data(

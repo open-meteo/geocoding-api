@@ -84,7 +84,7 @@ final class GeocodingDatabase: Sendable {
             stride: 4,
             count: UInt64(header.maximumGeonameID) + 1
         )
-        locations = try fixed(.locations, stride: 64, count: records)
+        locations = try fixed(.locations, stride: UInt32(LocationRecordLayout.stride), count: records)
 
         canonicalStrings = try raw(.canonicalStrings)
         alternateRecords = try raw(.alternateRecords)
@@ -305,8 +305,8 @@ final class GeocodingDatabase: Sendable {
                 let alternateStart = Int(location(row).alternateStart)
                 let alternateCount = Int(location(row).alternateCount)
                 guard
-                    alternateStart <= alternateRecords.count / 6,
-                    alternateCount <= alternateRecords.count / 6 - alternateStart
+                    alternateStart <= alternateRecords.count / AlternateNameRecordLayout.stride,
+                    alternateCount <= alternateRecords.count / AlternateNameRecordLayout.stride - alternateStart
                 else {
                     throw DatabaseFormatError.invalidSection(
                         .alternateRecords,
@@ -315,8 +315,8 @@ final class GeocodingDatabase: Sendable {
                 }
                 var previousLanguage: UInt16?
                 for index in 0..<alternateCount {
-                    let offset = (alternateStart + index) * 6
-                    let language = alternateRecords.readUInt16(at: offset)
+                    let offset = (alternateStart + index) * AlternateNameRecordLayout.stride
+                    let language = alternateRecords.readUInt16(at: offset + AlternateNameRecordLayout.languageID)
                     guard
                         Int(language) < languages.count,
                         previousLanguage == nil || previousLanguage! < language
@@ -328,7 +328,7 @@ final class GeocodingDatabase: Sendable {
                     }
                     try validateStringOffset(
                         pool: alternateStrings,
-                        offset: alternateRecords.readUInt32(at: offset + 2),
+                        offset: alternateRecords.readUInt32(at: offset + AlternateNameRecordLayout.nameOffset),
                         section: .alternateStrings
                     )
                     previousLanguage = language
@@ -459,7 +459,8 @@ final class GeocodingDatabase: Sendable {
     func name(row: Int, languageID: UInt16) throws -> String {
         let start = Int(location(row).alternateStart)
         let count = Int(location(row).alternateCount)
-        guard start <= alternateRecords.count / 6, count <= alternateRecords.count / 6 - start
+        guard start <= alternateRecords.count / AlternateNameRecordLayout.stride,
+            count <= alternateRecords.count / AlternateNameRecordLayout.stride - start
         else {
             throw DatabaseFormatError.invalidSection(
                 .alternateRecords,
@@ -470,19 +471,19 @@ final class GeocodingDatabase: Sendable {
         var high = count
         while low < high {
             let middle = low + (high - low) / 2
-            let record = (start + middle) * 6
-            if alternateRecords.readUInt16(at: record) < languageID {
+            let record = (start + middle) * AlternateNameRecordLayout.stride
+            if alternateRecords.readUInt16(at: record + AlternateNameRecordLayout.languageID) < languageID {
                 low = middle + 1
             } else {
                 high = middle
             }
         }
         if low < count {
-            let record = (start + low) * 6
-            if alternateRecords.readUInt16(at: record) == languageID {
+            let record = (start + low) * AlternateNameRecordLayout.stride
+            if alternateRecords.readUInt16(at: record + AlternateNameRecordLayout.languageID) == languageID {
                 return try string(
                     pool: alternateStrings,
-                    offset: alternateRecords.readUInt32(at: record + 2),
+                    offset: alternateRecords.readUInt32(at: record + AlternateNameRecordLayout.nameOffset),
                     section: .alternateStrings
                 )
             }
@@ -655,12 +656,12 @@ final class GeocodingDatabase: Sendable {
         var previousIndex: UInt16?
         for rootIndex in 0..<roots.count {
             let offset = rootIndex * roots.stride
-            let indexID = roots.bytes.readUInt16(at: offset)
-            let rootNode = Int(roots.bytes.readUInt32(at: offset + 4))
-            let nameBase = Int(roots.bytes.readUInt32(at: offset + 8))
-            let nameCount = Int(roots.bytes.readUInt32(at: offset + 12))
-            let treeStart = Int(roots.bytes.readUInt32(at: offset + 16))
-            let leafBase = Int(roots.bytes.readUInt32(at: offset + 20))
+            let indexID = roots.bytes.readUInt16(at: offset + RadixRootLayout.indexID)
+            let rootNode = Int(roots.bytes.readUInt32(at: offset + RadixRootLayout.rootNode))
+            let nameBase = Int(roots.bytes.readUInt32(at: offset + RadixRootLayout.nameBase))
+            let nameCount = Int(roots.bytes.readUInt32(at: offset + RadixRootLayout.nameCount))
+            let treeStart = Int(roots.bytes.readUInt32(at: offset + RadixRootLayout.treeStart))
+            let leafBase = Int(roots.bytes.readUInt32(at: offset + RadixRootLayout.treeLeafBase))
             guard
                 previousIndex == nil || previousIndex! < indexID,
                 rootNode < nodes.count,
@@ -699,12 +700,12 @@ final class GeocodingDatabase: Sendable {
 
         for nodeIndex in 0..<nodes.count {
             let offset = nodeIndex * nodes.stride
-            let firstEdge = Int(nodes.bytes.readUInt32(at: offset))
-            let edgeCount = Int(nodes.bytes.readUInt16(at: offset + 4))
+            let firstEdge = Int(nodes.bytes.readUInt32(at: offset + RadixNodeLayout.firstEdge))
+            let edgeCount = Int(nodes.bytes.readUInt16(at: offset + RadixNodeLayout.edgeCount))
             guard
                 firstEdge <= edges.count,
                 edgeCount <= edges.count - firstEdge,
-                nodes.bytes.readUInt32(at: offset + 12) > 0
+                nodes.bytes.readUInt32(at: offset + RadixNodeLayout.subtreeCount) > 0
             else {
                 throw DatabaseFormatError.invalidSection(
                     .searchNodes,
@@ -715,17 +716,17 @@ final class GeocodingDatabase: Sendable {
 
         for edgeIndex in 0..<edges.count {
             let offset = edgeIndex * edges.stride
-            let encodedChild = edges.bytes.readUInt32(at: offset)
-            let isLeaf = encodedChild & 0x8000_0000 != 0
-            let child = Int(encodedChild & 0x7fff_ffff)
-            let labelOffset = Int(edges.bytes.readUInt32(at: offset + 4))
-            let labelLength = Int(edges.bytes.readUInt16(at: offset + 8))
+            let encodedChild = edges.bytes.readUInt32(at: offset + RadixEdgeLayout.child)
+            let isLeaf = encodedChild & RadixEdgeLayout.leafFlag != 0
+            let child = Int(encodedChild & RadixEdgeLayout.childMask)
+            let labelOffset = Int(edges.bytes.readUInt32(at: offset + RadixEdgeLayout.labelOffset))
+            let labelLength = Int(edges.bytes.readUInt16(at: offset + RadixEdgeLayout.labelLength))
             guard
                 isLeaf || child < nodes.count,
                 labelLength > 0,
                 labelOffset <= labels.count,
                 labelLength <= labels.count - labelOffset,
-                labels.bytes[labelOffset] == edges.bytes[offset + 10]
+                labels.bytes[labelOffset] == edges.bytes[offset + RadixEdgeLayout.firstByte]
             else {
                 throw DatabaseFormatError.invalidSection(
                     .searchEdges,
@@ -748,20 +749,20 @@ final class GeocodingDatabase: Sendable {
                 visitedNodes.insert(node)
                 visitedNodeCount += 1
                 let nodeOffset = Int(node) * nodes.stride
-                let first = nodes.bytes.readUInt32(at: nodeOffset + 8)
-                let count = nodes.bytes.readUInt32(at: nodeOffset + 12)
+                let first = nodes.bytes.readUInt32(at: nodeOffset + RadixNodeLayout.subtreeFirst)
+                let count = nodes.bytes.readUInt32(at: nodeOffset + RadixNodeLayout.subtreeCount)
                 guard first < root.nameCount, count <= root.nameCount - first else {
                     throw DatabaseFormatError.invalidSection(
                         .searchNodes,
                         "radix subtree ordinal range is invalid"
                     )
                 }
-                let firstEdge = Int(nodes.bytes.readUInt32(at: nodeOffset))
-                let edgeCount = Int(nodes.bytes.readUInt16(at: nodeOffset + 4))
+                let firstEdge = Int(nodes.bytes.readUInt32(at: nodeOffset + RadixNodeLayout.firstEdge))
+                let edgeCount = Int(nodes.bytes.readUInt16(at: nodeOffset + RadixNodeLayout.edgeCount))
                 var previousFirstByte: UInt8?
                 for edgeIndex in firstEdge..<firstEdge + edgeCount {
                     let edgeOffset = edgeIndex * edges.stride
-                    let firstByte = edges.bytes[edgeOffset + 10]
+                    let firstByte = edges.bytes[edgeOffset + RadixEdgeLayout.firstByte]
                     guard previousFirstByte == nil || previousFirstByte! < firstByte else {
                         throw DatabaseFormatError.invalidSection(
                             .searchEdges,
@@ -769,9 +770,9 @@ final class GeocodingDatabase: Sendable {
                         )
                     }
                     previousFirstByte = firstByte
-                    let encodedChild = edges.bytes.readUInt32(at: edgeOffset)
-                    let child = encodedChild & 0x7fff_ffff
-                    if encodedChild & 0x8000_0000 == 0 {
+                    let encodedChild = edges.bytes.readUInt32(at: edgeOffset + RadixEdgeLayout.child)
+                    let child = encodedChild & RadixEdgeLayout.childMask
+                    if encodedChild & RadixEdgeLayout.leafFlag == 0 {
                         pending.append(child)
                     } else if child >= root.nameCount {
                         throw DatabaseFormatError.invalidSection(
@@ -791,8 +792,8 @@ final class GeocodingDatabase: Sendable {
 
         for nameIndex in 0..<metadata.count {
             let offset = nameIndex * metadata.stride
-            let start = Int(metadata.bytes.readUInt32(at: offset))
-            let count = Int(metadata.bytes.readUInt32(at: offset + 4))
+            let start = Int(metadata.bytes.readUInt32(at: offset + NameMetadataLayout.postingStart))
+            let count = Int(metadata.bytes.readUInt32(at: offset + NameMetadataLayout.postingCount))
             guard start <= postings.count, count <= postings.count - start else {
                 throw DatabaseFormatError.invalidSection(
                     .searchNameMetadata,
@@ -803,18 +804,19 @@ final class GeocodingDatabase: Sendable {
             var previousRow: UInt32?
             for postingIndex in start..<start + count {
                 let postingOffset = postingIndex * postings.stride
-                let row = postings.bytes.readUInt32(at: postingOffset)
+                let row = postings.bytes.readUInt32(at: postingOffset + SearchPostingLayout.row)
                 let rank = Float(
                     bitPattern: postings.bytes.readUInt32(
-                        at: postingOffset + 4
+                        at: postingOffset + SearchPostingLayout.rank
                     )
                 )
                 guard
                     row < UInt32(recordCount),
                     rank.isFinite, rank >= 0,
                     rank <= Float(UInt16.max - 1) / PackedRadixIndexLayout.rankScale,
-                    postings.bytes.readUInt16(at: postingOffset + 14) != 0,
-                    postings.bytes.readUInt16(at: postingOffset + 14) & ~MatchSources.all.rawValue == 0,
+                    postings.bytes.readUInt16(at: postingOffset + SearchPostingLayout.sources) != 0,
+                    postings.bytes.readUInt16(at: postingOffset + SearchPostingLayout.sources) & ~MatchSources.all
+                        .rawValue == 0,
                     rank <= previousRank,
                     rank < previousRank || previousRow == nil || previousRow! < row
                 else {
@@ -854,12 +856,12 @@ final class GeocodingDatabase: Sendable {
         var previousKey: (UInt16, UInt32)?
         for bucketIndex in 0..<buckets.count {
             let offset = bucketIndex * buckets.stride
-            let indexID = buckets.bytes.readUInt16(at: offset)
-            let area = buckets.bytes.readUInt32(at: offset + 4)
-            let entryStart = Int(buckets.bytes.readUInt32(at: offset + 8))
-            let entryCount = Int(buckets.bytes.readUInt32(at: offset + 12))
-            let treeStart = Int(buckets.bytes.readUInt32(at: offset + 16))
-            let leafBase = Int(buckets.bytes.readUInt32(at: offset + 20))
+            let indexID = buckets.bytes.readUInt16(at: offset + AreaBucketLayout.indexID)
+            let area = buckets.bytes.readUInt32(at: offset + AreaBucketLayout.area)
+            let entryStart = Int(buckets.bytes.readUInt32(at: offset + AreaBucketLayout.entryStart))
+            let entryCount = Int(buckets.bytes.readUInt32(at: offset + AreaBucketLayout.entryCount))
+            let treeStart = Int(buckets.bytes.readUInt32(at: offset + AreaBucketLayout.treeStart))
+            let leafBase = Int(buckets.bytes.readUInt32(at: offset + AreaBucketLayout.treeLeafBase))
             let key = (indexID, area)
             guard
                 previousKey == nil
@@ -883,7 +885,7 @@ final class GeocodingDatabase: Sendable {
             }
             var previousOrdinal: UInt32?
             for entry in entryStart..<entryStart + entryCount {
-                let ordinal = entries.bytes.readUInt32(at: entry * entries.stride)
+                let ordinal = entries.bytes.readUInt32(at: entry * entries.stride + AreaEntryLayout.nameOrdinal)
                 guard
                     ordinal < nameCount,
                     previousOrdinal == nil || previousOrdinal! < ordinal
@@ -945,18 +947,18 @@ final class GeocodingDatabase: Sendable {
         var previousNameOffset: UInt32?
         for recordIndex in 0..<records.count {
             let offset = recordIndex * records.stride
-            let rawKind = records.bytes[offset]
+            let rawKind = records.bytes[offset + AdministrativeAliasRecordLayout.kind]
             guard
                 let kind = AdministrativeAliasKind(rawValue: rawKind),
-                records.bytes[offset + 1] == 0,
-                records.bytes.readUInt16(at: offset + 14) == 0
+                records.bytes[offset + AdministrativeAliasRecordLayout.reserved] == 0,
+                records.bytes.readUInt16(at: offset + AdministrativeAliasRecordLayout.trailingReserved) == 0
             else {
                 throw DatabaseFormatError.invalidSection(
                     .administrativeAliasRecords,
                     "record \(recordIndex) has invalid kind or reserved fields"
                 )
             }
-            let language = records.bytes.readUInt16(at: offset + 2)
+            let language = records.bytes.readUInt16(at: offset + AdministrativeAliasRecordLayout.languageID)
             guard
                 kind == .localized
                     ? Int(language) < languageCount
@@ -967,10 +969,10 @@ final class GeocodingDatabase: Sendable {
                     "record \(recordIndex) has an invalid language"
                 )
             }
-            let nameOffset = records.bytes.readUInt32(at: offset + 4)
+            let nameOffset = records.bytes.readUInt32(at: offset + AdministrativeAliasRecordLayout.nameOffset)
             let name = try stringBytes(in: strings.bytes.span, offset: nameOffset)
-            let start = Int(records.bytes.readUInt32(at: offset + 8))
-            let count = Int(records.bytes.readUInt16(at: offset + 12))
+            let start = Int(records.bytes.readUInt32(at: offset + AdministrativeAliasRecordLayout.candidateStart))
+            let count = Int(records.bytes.readUInt16(at: offset + AdministrativeAliasRecordLayout.candidateCount))
             guard
                 count > 0,
                 start <= candidates.count,
@@ -982,8 +984,8 @@ final class GeocodingDatabase: Sendable {
                 )
             }
             if let previousKind {
-                let isOrdered = try
-                    previousKind < rawKind
+                let isOrdered =
+                    try previousKind < rawKind
                     || (previousKind == rawKind && previousLanguage < language)
                     || (previousKind == rawKind && previousLanguage == language
                         && compare(try stringBytes(in: strings.bytes.span, offset: previousNameOffset!), name) < 0)
@@ -1001,12 +1003,16 @@ final class GeocodingDatabase: Sendable {
             var previousCandidate: (UInt32, UInt16)?
             for candidateIndex in start..<start + count {
                 let candidateOffset = candidateIndex * candidates.stride
-                let admin = candidates.bytes.readUInt32(at: candidateOffset)
-                let country = candidates.bytes.readUInt16(at: candidateOffset + 4)
+                let admin = candidates.bytes.readUInt32(
+                    at: candidateOffset + AdministrativeAliasCandidateLayout.admin1ID
+                )
+                let country = candidates.bytes.readUInt16(
+                    at: candidateOffset + AdministrativeAliasCandidateLayout.country
+                )
                 let key = (admin, country)
                 guard
                     country != 0,
-                    candidates.bytes.readUInt16(at: candidateOffset + 6) == 0,
+                    candidates.bytes.readUInt16(at: candidateOffset + AdministrativeAliasCandidateLayout.reserved) == 0,
                     previousCandidate == nil
                         || previousCandidate!.0 < key.0
                         || (previousCandidate!.0 == key.0

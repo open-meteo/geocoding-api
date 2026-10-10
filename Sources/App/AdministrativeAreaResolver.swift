@@ -121,8 +121,8 @@ struct AdministrativeAreaResolver: Sendable {
         let records = database.sectionBytes(.administrativeAliasRecords)
         let candidates = database.sectionBytes(.administrativeAliasCandidates)
         let offset = record * AdministrativeAliasIndexLayout.recordStride
-        let start = Int(records.readUInt32(at: offset + 8))
-        let count = Int(records.readUInt16(at: offset + 12))
+        let start = Int(records.readUInt32(at: offset + AdministrativeAliasRecordLayout.candidateStart))
+        let count = Int(records.readUInt16(at: offset + AdministrativeAliasRecordLayout.candidateCount))
         guard
             candidates.containsRange(
                 offset: start * AdministrativeAliasIndexLayout.candidateStride,
@@ -135,11 +135,11 @@ struct AdministrativeAreaResolver: Sendable {
         for index in start..<start + count {
             let candidateOffset =
                 index * AdministrativeAliasIndexLayout.candidateStride
-            let country = candidates.readUInt16(at: candidateOffset + 4)
+            let country = candidates.readUInt16(at: candidateOffset + AdministrativeAliasCandidateLayout.country)
             guard countryFilter == nil || countryFilter == country else {
                 continue
             }
-            let admin1ID = candidates.readUInt32(at: candidateOffset)
+            let admin1ID = candidates.readUInt32(at: candidateOffset + AdministrativeAliasCandidateLayout.admin1ID)
             if admin1ID == 0 {
                 result.countryCodes.insert(
                     GeocodingDatabase.countryString(country)
@@ -160,15 +160,15 @@ struct AdministrativeAreaResolver: Sendable {
         let records = database.sectionBytes(.administrativeAliasRecords)
         let strings = database.sectionBytes(.administrativeAliasStrings)
         let offset = index * AdministrativeAliasIndexLayout.recordStride
-        let candidateKind = records[offset]
+        let candidateKind = records[offset + AdministrativeAliasRecordLayout.kind]
         if candidateKind != kind.rawValue {
             return candidateKind < kind.rawValue ? -1 : 1
         }
-        let candidateLanguage = records.readUInt16(at: offset + 2)
+        let candidateLanguage = records.readUInt16(at: offset + AdministrativeAliasRecordLayout.languageID)
         if candidateLanguage != languageID {
             return candidateLanguage < languageID ? -1 : 1
         }
-        let stringOffset = Int(records.readUInt32(at: offset + 4))
+        let stringOffset = Int(records.readUInt32(at: offset + AdministrativeAliasRecordLayout.nameOffset))
         guard strings.containsRange(offset: stringOffset, length: 4) else {
             throw DatabaseFormatError.invalidSection(.administrativeAliasStrings, "invalid alias offset")
         }

@@ -61,6 +61,17 @@ enum DatabaseSectionKind: UInt32, CaseIterable, CustomStringConvertible, Sendabl
     }
 }
 
+private enum SectionDescriptorLayout {
+    static let kind = 0
+    static let flags = 4
+    static let offset = 8
+    static let length = 16
+    static let count = 24
+    static let elementStride = 32
+    static let reserved = 36
+    static let hash = 40
+}
+
 struct DatabaseSectionDescriptor: Equatable, Sendable {
     static let encodedSize = 48
 
@@ -73,21 +84,36 @@ struct DatabaseSectionDescriptor: Equatable, Sendable {
     let hash: UInt64
 
     func encode(into data: inout Data, at offset: Int) {
-        data.writeLittleEndian(kind.rawValue, at: offset)
-        data.writeLittleEndian(flags, at: offset + 4)
-        data.writeLittleEndian(self.offset, at: offset + 8)
-        data.writeLittleEndian(length, at: offset + 16)
-        data.writeLittleEndian(count, at: offset + 24)
-        data.writeLittleEndian(stride, at: offset + 32)
-        data.writeLittleEndian(UInt32(0), at: offset + 36)
-        data.writeLittleEndian(hash, at: offset + 40)
+        data.writeLittleEndian(kind.rawValue, at: offset + SectionDescriptorLayout.kind)
+        data.writeLittleEndian(flags, at: offset + SectionDescriptorLayout.flags)
+        data.writeLittleEndian(self.offset, at: offset + SectionDescriptorLayout.offset)
+        data.writeLittleEndian(length, at: offset + SectionDescriptorLayout.length)
+        data.writeLittleEndian(count, at: offset + SectionDescriptorLayout.count)
+        data.writeLittleEndian(stride, at: offset + SectionDescriptorLayout.elementStride)
+        data.writeLittleEndian(UInt32(0), at: offset + SectionDescriptorLayout.reserved)
+        data.writeLittleEndian(hash, at: offset + SectionDescriptorLayout.hash)
     }
+}
+
+private enum FileHeaderLayout {
+    static let version = 8
+    static let headerSize = 12
+    static let fileSize = 16
+    static let recordCount = 24
+    static let maximumGeonameID = 28
+    static let geonamesFingerprint = 32
+    static let alternateNamesFingerprint = 40
+    static let sectionCount = 48
+    static let normalizationVersion = 52
+    static let scoringVersion = 56
+    static let reserved = 60
 }
 
 struct DatabaseFileHeader: Sendable {
     static let magic = Array("GEOCDV3\u{0}".utf8)
     static let formatVersion: UInt32 = 3
     static let encodedSize = 4096
+    static let sectionAlignment: UInt64 = 4096
     static let directoryOffset = 64
     static let maximumSectionCount =
         (encodedSize - directoryOffset) / DatabaseSectionDescriptor.encodedSize
@@ -133,31 +159,31 @@ struct DatabaseFileHeader: Sendable {
         guard Self.magic.indices.allSatisfy({ bytes[$0] == Self.magic[$0] }) else {
             throw DatabaseFormatError.invalidMagic
         }
-        let version = bytes.readUInt32(at: 8)
+        let version = bytes.readUInt32(at: FileHeaderLayout.version)
         guard version == Self.formatVersion else {
             throw DatabaseFormatError.unsupportedVersion(version)
         }
-        guard bytes.readUInt32(at: 12) == UInt32(Self.encodedSize) else {
+        guard bytes.readUInt32(at: FileHeaderLayout.headerSize) == UInt32(Self.encodedSize) else {
             throw DatabaseFormatError.invalidHeader("unexpected header size")
         }
 
-        let fileSize = bytes.readUInt64(at: 16)
+        let fileSize = bytes.readUInt64(at: FileHeaderLayout.fileSize)
         guard fileSize == UInt64(mappedFile.count) else {
             throw DatabaseFormatError.invalidHeader(
                 "declared file size \(fileSize) does not match \(mappedFile.count)"
             )
         }
-        let recordCount = bytes.readUInt32(at: 24)
-        let maximumGeonameID = bytes.readUInt32(at: 28)
-        let geonamesFingerprint = bytes.readUInt64(at: 32)
-        let alternateNamesFingerprint = bytes.readUInt64(at: 40)
-        let sectionCount = Int(bytes.readUInt32(at: 48))
+        let recordCount = bytes.readUInt32(at: FileHeaderLayout.recordCount)
+        let maximumGeonameID = bytes.readUInt32(at: FileHeaderLayout.maximumGeonameID)
+        let geonamesFingerprint = bytes.readUInt64(at: FileHeaderLayout.geonamesFingerprint)
+        let alternateNamesFingerprint = bytes.readUInt64(at: FileHeaderLayout.alternateNamesFingerprint)
+        let sectionCount = Int(bytes.readUInt32(at: FileHeaderLayout.sectionCount))
         guard sectionCount <= Self.maximumSectionCount else {
             throw DatabaseFormatError.invalidHeader("section directory is too large")
         }
-        guard bytes.readUInt32(at: 52) == SearchScorer.normalizationVersion,
-            bytes.readUInt32(at: 56) == SearchScorer.version,
-            bytes.readUInt32(at: 60) == 0
+        guard bytes.readUInt32(at: FileHeaderLayout.normalizationVersion) == SearchScorer.normalizationVersion,
+            bytes.readUInt32(at: FileHeaderLayout.scoringVersion) == SearchScorer.version,
+            bytes.readUInt32(at: FileHeaderLayout.reserved) == 0
         else {
             throw DatabaseFormatError.invalidHeader("incompatible normalization/scoring version or reserved bytes")
         }
@@ -166,23 +192,24 @@ struct DatabaseFileHeader: Sendable {
         descriptors.reserveCapacity(sectionCount)
         for index in 0..<sectionCount {
             let base = Self.directoryOffset + index * DatabaseSectionDescriptor.encodedSize
-            guard let kind = DatabaseSectionKind(rawValue: bytes.readUInt32(at: base)) else {
+            guard let kind = DatabaseSectionKind(rawValue: bytes.readUInt32(at: base + SectionDescriptorLayout.kind))
+            else {
                 throw DatabaseFormatError.invalidHeader("unknown section kind")
             }
             let descriptor = DatabaseSectionDescriptor(
                 kind: kind,
-                flags: bytes.readUInt32(at: base + 4),
-                offset: bytes.readUInt64(at: base + 8),
-                length: bytes.readUInt64(at: base + 16),
-                count: bytes.readUInt64(at: base + 24),
-                stride: bytes.readUInt32(at: base + 32),
-                hash: bytes.readUInt64(at: base + 40)
+                flags: bytes.readUInt32(at: base + SectionDescriptorLayout.flags),
+                offset: bytes.readUInt64(at: base + SectionDescriptorLayout.offset),
+                length: bytes.readUInt64(at: base + SectionDescriptorLayout.length),
+                count: bytes.readUInt64(at: base + SectionDescriptorLayout.count),
+                stride: bytes.readUInt32(at: base + SectionDescriptorLayout.elementStride),
+                hash: bytes.readUInt64(at: base + SectionDescriptorLayout.hash)
             )
             guard
                 descriptor.flags == 0,
-                bytes.readUInt32(at: base + 36) == 0,
+                bytes.readUInt32(at: base + SectionDescriptorLayout.reserved) == 0,
                 descriptor.offset >= UInt64(Self.encodedSize),
-                descriptor.offset & 4095 == 0,
+                descriptor.offset & (Self.sectionAlignment - 1) == 0,
                 descriptor.offset <= fileSize,
                 descriptor.length <= fileSize - descriptor.offset
             else {
@@ -225,17 +252,17 @@ struct DatabaseFileHeader: Sendable {
     func encoded() -> Data {
         var data = Data(repeating: 0, count: Self.encodedSize)
         data.replaceSubrange(0..<Self.magic.count, with: Self.magic)
-        data.writeLittleEndian(Self.formatVersion, at: 8)
-        data.writeLittleEndian(UInt32(Self.encodedSize), at: 12)
-        data.writeLittleEndian(fileSize, at: 16)
-        data.writeLittleEndian(recordCount, at: 24)
-        data.writeLittleEndian(maximumGeonameID, at: 28)
-        data.writeLittleEndian(geonamesFingerprint, at: 32)
-        data.writeLittleEndian(alternateNamesFingerprint, at: 40)
+        data.writeLittleEndian(Self.formatVersion, at: FileHeaderLayout.version)
+        data.writeLittleEndian(UInt32(Self.encodedSize), at: FileHeaderLayout.headerSize)
+        data.writeLittleEndian(fileSize, at: FileHeaderLayout.fileSize)
+        data.writeLittleEndian(recordCount, at: FileHeaderLayout.recordCount)
+        data.writeLittleEndian(maximumGeonameID, at: FileHeaderLayout.maximumGeonameID)
+        data.writeLittleEndian(geonamesFingerprint, at: FileHeaderLayout.geonamesFingerprint)
+        data.writeLittleEndian(alternateNamesFingerprint, at: FileHeaderLayout.alternateNamesFingerprint)
         let descriptors = sections.values.sorted { $0.kind.rawValue < $1.kind.rawValue }
-        data.writeLittleEndian(UInt32(descriptors.count), at: 48)
-        data.writeLittleEndian(SearchScorer.normalizationVersion, at: 52)
-        data.writeLittleEndian(SearchScorer.version, at: 56)
+        data.writeLittleEndian(UInt32(descriptors.count), at: FileHeaderLayout.sectionCount)
+        data.writeLittleEndian(SearchScorer.normalizationVersion, at: FileHeaderLayout.normalizationVersion)
+        data.writeLittleEndian(SearchScorer.version, at: FileHeaderLayout.scoringVersion)
         for (index, descriptor) in descriptors.enumerated() {
             descriptor.encode(
                 into: &data,
@@ -300,6 +327,17 @@ struct MappedDatabaseSection: Sendable {
     func uint64(at index: Int) -> UInt64 {
         precondition(stride == 8 && index >= 0 && index < count)
         return withSpan { $0.readUInt64(at: index * stride) }
+    }
+}
+
+extension UnsafeMutableRawBufferPointer {
+    /// Byte stores support packed fields whose offsets are not naturally aligned.
+    func writeLittleEndian<T: FixedWidthInteger>(_ value: T, at offset: Int) {
+        let width = T.bitWidth / 8
+        precondition(offset >= 0 && offset <= count && width <= count - offset)
+        for byte in 0..<width {
+            self[offset + byte] = UInt8(truncatingIfNeeded: value >> (byte * 8))
+        }
     }
 }
 

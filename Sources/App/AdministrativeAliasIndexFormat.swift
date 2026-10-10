@@ -7,6 +7,6 @@ enum AdministrativeAliasKind: UInt8, CaseIterable, Hashable {
 }
 
 enum AdministrativeAliasIndexLayout {
-    static let recordStride = 16
-    static let candidateStride = 8
+    static let recordStride = AdministrativeAliasRecordLayout.stride
+    static let candidateStride = AdministrativeAliasCandidateLayout.stride
 }
