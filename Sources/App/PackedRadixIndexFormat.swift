@@ -122,7 +122,7 @@ struct LengthBinnedRankBounds {
     }
 }
 
-struct RadixIndexRoot {
+struct RadixIndexRoot: Sendable {
     let indexID: UInt16
     let rootNode: UInt32
     let nameBase: UInt32

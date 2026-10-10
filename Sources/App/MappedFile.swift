@@ -33,7 +33,12 @@ enum MappedFileError: Error, CustomStringConvertible {
 
 /// Owns an immutable, private memory mapping for the lifetime of the database.
 /// Writers must publish a replacement file, never truncate or mutate a mapped inode.
-final class MappedFile {
+///
+/// Sendable safety: the address and size never change after initialization, the
+/// mapping is read-only, and no mutable pointer escapes. Each range retains this
+/// owner, so concurrent borrowed reads finish before deinit unmaps the storage.
+/// Memory advice changes residency only; it does not mutate the mapped contents.
+final class MappedFile: @unchecked Sendable {
     let path: String
     let count: Int
     private let address: UnsafeMutableRawPointer?
@@ -90,11 +95,20 @@ final class MappedFile {
         }
         return MappedBytes(
             owner: self,
-            bytes: UnsafeRawBufferPointer(
-                start: address.map { UnsafeRawPointer($0).advanced(by: integerOffset) },
-                count: integerLength
-            )
+            offset: integerOffset,
+            count: integerLength
         )
+    }
+
+    /// Only called for ranges validated by bytes(offset:length:).
+    @_lifetime(borrow self)
+    fileprivate func span(offset: Int, count: Int) -> Span<UInt8> {
+        let bytes = UnsafeRawBufferPointer(
+            start: address.map { UnsafeRawPointer($0).advanced(by: offset) },
+            count: count
+        )
+        // The allocation belongs to self, not the temporary buffer descriptor.
+        return _overrideLifetime(Span<UInt8>(_unsafeBytes: bytes), borrowing: self)
     }
 
     func optimizeForRandomAccess() {
@@ -115,21 +129,21 @@ final class MappedFile {
 /// An immutable, validated range that retains its mapping, including after the
 /// file is unlinked or atomically replaced. Only MappedFile can construct one.
 /// Raw pointers stay private; borrowed spans cannot outlive this owner-backed value.
-struct MappedBytes {
+struct MappedBytes: Sendable {
     private let owner: MappedFile
-    private let bytes: UnsafeRawBufferPointer
+    private let offset: Int
+    let count: Int
 
-    fileprivate init(owner: MappedFile, bytes: UnsafeRawBufferPointer) {
+    fileprivate init(owner: MappedFile, offset: Int, count: Int) {
         self.owner = owner
-        self.bytes = bytes
+        self.offset = offset
+        self.count = count
     }
-
-    var count: Int { bytes.count }
 
     var span: Span<UInt8> {
         @_lifetime(borrow self)
         // Borrowing self also keeps its stored mapping owner alive.
-        borrowing get { Span(_unsafeBytes: bytes) }
+        borrowing get { owner.span(offset: offset, count: count) }
     }
 
     subscript(index: Int) -> UInt8 { span[index] }

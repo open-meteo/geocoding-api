@@ -213,7 +213,7 @@ private struct TopKResultHeap {
     }
 }
 
-final class PackedRadixSearchIndex {
+final class PackedRadixSearchIndex: Sendable {
     private let rowIDs: MappedBytes
     private let recordCount: Int
     private let nodes: MappedBytes

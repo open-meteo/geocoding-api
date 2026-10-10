@@ -1,7 +1,7 @@
 import Foundation
 import Vapor
 
-final class GeocodingDatabase: @unchecked Sendable {
+final class GeocodingDatabase: Sendable {
     static let databaseFile = GeocodingDatabaseBuilder.databaseFile
 
     let mappedFile: MappedFile

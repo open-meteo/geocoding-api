@@ -26,7 +26,7 @@ enum DatabaseFormatError: Error, CustomStringConvertible {
     }
 }
 
-enum DatabaseSectionKind: UInt32, CaseIterable, CustomStringConvertible {
+enum DatabaseSectionKind: UInt32, CaseIterable, CustomStringConvertible, Sendable {
     case idToRow = 1
     case locations = 2
     case canonicalStrings = 21
@@ -61,7 +61,7 @@ enum DatabaseSectionKind: UInt32, CaseIterable, CustomStringConvertible {
     }
 }
 
-struct DatabaseSectionDescriptor: Equatable {
+struct DatabaseSectionDescriptor: Equatable, Sendable {
     static let encodedSize = 48
 
     let kind: DatabaseSectionKind
@@ -84,7 +84,7 @@ struct DatabaseSectionDescriptor: Equatable {
     }
 }
 
-struct DatabaseFileHeader {
+struct DatabaseFileHeader: Sendable {
     static let magic = Array("GEOCDV3\u{0}".utf8)
     static let formatVersion: UInt32 = 3
     static let encodedSize = 4096
@@ -246,7 +246,7 @@ struct DatabaseFileHeader {
     }
 }
 
-struct MappedDatabaseSection {
+struct MappedDatabaseSection: Sendable {
     let kind: DatabaseSectionKind
     let bytes: MappedBytes
     let count: Int
