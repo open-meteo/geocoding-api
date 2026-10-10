@@ -365,6 +365,7 @@ final class PackedRadixSearchIndex: Sendable {
             indexIDs[1] = languageID + 1
             indexCount = 2
         }
+        var boosts: InlineArray<12, Float>?
         var frontier = SearchFrontierHeap(diagnostics: diagnostics)
         var results = TopKResultHeap(capacity: count, diagnostics: diagnostics)
         var pathKeys = SearchPathKeySet()
@@ -398,6 +399,7 @@ final class PackedRadixSearchIndex: Sendable {
                         match: match,
                         onlyExact: onlyExact,
                         queryCharacters: queryCharacters,
+                        boosts: &boosts,
                         countryFilter: explicitCountry,
                         keySet: &pathKeys,
                         paths: &paths,
@@ -413,6 +415,7 @@ final class PackedRadixSearchIndex: Sendable {
                         match: match,
                         onlyExact: onlyExact,
                         queryCharacters: queryCharacters,
+                        boosts: &boosts,
                         countryFilter: explicitCountry,
                         keySet: &pathKeys,
                         paths: &paths,
@@ -428,6 +431,7 @@ final class PackedRadixSearchIndex: Sendable {
                     match: match,
                     onlyExact: onlyExact,
                     queryCharacters: queryCharacters,
+                    boosts: &boosts,
                     countryFilter: explicitCountry,
                     keySet: &pathKeys,
                     paths: &paths,
@@ -458,13 +462,14 @@ final class PackedRadixSearchIndex: Sendable {
                     pathIndex: pathIndex,
                     range: range,
                     queryCharacters: queryCharacters,
-                    onlyExact: onlyExact,
+                    boosts: &boosts,
                     frontier: &frontier,
                     results: &results
                 )
             }
         }
 
+        guard let boosts else { return results.sorted() }
         while let item = frontier.removeMaximum() {
             if results.isFull, let worst = results.worst,
                 item.upperBound < worst.score
@@ -477,16 +482,14 @@ final class PackedRadixSearchIndex: Sendable {
                     path: path,
                     pathIndex: item.pathIndex,
                     node: item.node * 2,
-                    queryCharacters: queryCharacters,
-                    onlyExact: onlyExact,
+                    boosts: boosts,
                     frontier: &frontier
                 )
                 try addTreeNode(
                     path: path,
                     pathIndex: item.pathIndex,
                     node: item.node * 2 + 1,
-                    queryCharacters: queryCharacters,
-                    onlyExact: onlyExact,
+                    boosts: boosts,
                     frontier: &frontier
                 )
             } else {
@@ -646,6 +649,7 @@ final class PackedRadixSearchIndex: Sendable {
         match: RadixPrefixMatch,
         onlyExact: Bool,
         queryCharacters: Int,
+        boosts: inout InlineArray<12, Float>?,
         countryFilter: UInt16?,
         keySet: inout SearchPathKeySet,
         paths: inout [SearchTraversalPath],
@@ -697,7 +701,7 @@ final class PackedRadixSearchIndex: Sendable {
             pathIndex: pathIndex,
             range: lower..<upper,
             queryCharacters: queryCharacters,
-            onlyExact: onlyExact,
+            boosts: &boosts,
             frontier: &frontier,
             results: &results
         )
@@ -708,7 +712,7 @@ final class PackedRadixSearchIndex: Sendable {
         pathIndex: Int,
         range: Range<UInt32>,
         queryCharacters: Int,
-        onlyExact: Bool,
+        boosts: inout InlineArray<12, Float>?,
         frontier: inout SearchFrontierHeap,
         results: inout TopKResultHeap
     ) throws {
@@ -739,6 +743,9 @@ final class PackedRadixSearchIndex: Sendable {
         guard firstFull < lastFull else {
             return
         }
+        // Exact-only and small ranges are scanned above without tree bounds.
+        let nodeBoosts = boosts ?? PackedRadixIndexLayout.rankBoosts(queryCharacters: queryCharacters, onlyExact: false)
+        boosts = nodeBoosts
         var left = path.treeLeafBase + firstFull
         var right = path.treeLeafBase + lastFull
         while left < right {
@@ -747,8 +754,7 @@ final class PackedRadixSearchIndex: Sendable {
                     path: path,
                     pathIndex: pathIndex,
                     node: left,
-                    queryCharacters: queryCharacters,
-                    onlyExact: onlyExact,
+                    boosts: nodeBoosts,
                     frontier: &frontier
                 )
                 left += 1
@@ -759,8 +765,7 @@ final class PackedRadixSearchIndex: Sendable {
                     path: path,
                     pathIndex: pathIndex,
                     node: right,
-                    queryCharacters: queryCharacters,
-                    onlyExact: onlyExact,
+                    boosts: nodeBoosts,
                     frontier: &frontier
                 )
             }
@@ -773,8 +778,7 @@ final class PackedRadixSearchIndex: Sendable {
         path: SearchTraversalPath,
         pathIndex: Int,
         node: UInt32,
-        queryCharacters: Int,
-        onlyExact: Bool,
+        boosts: borrowing InlineArray<12, Float>,
         frontier: inout SearchFrontierHeap
     ) throws {
         let tree = treeBytes(scope: path.scope)
@@ -782,8 +786,7 @@ final class PackedRadixSearchIndex: Sendable {
         let bound = PackedRadixIndexLayout.rankUpperBound(
             bytes: tree.span,
             offset: offset,
-            queryCharacters: queryCharacters,
-            onlyExact: onlyExact
+            boosts: boosts
         )
         guard bound.isFinite else {
             return

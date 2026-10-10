@@ -322,6 +322,31 @@ struct FormatTests {
     }
 
     @Test
+    func cachedBoostsPreservePackedBounds() {
+        var summary = LengthBinnedRankBounds()
+        for length in [0, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 256] {
+            summary.insert(rank: Float(length) / 256, characterCount: UInt16(length))
+        }
+        for populated in [false, true] {
+            let bounds = populated ? summary : LengthBinnedRankBounds()
+            var encoded = [UInt16]()
+            bounds.append(to: &encoded)
+            let bytes = encoded.flatMap { [UInt8(truncatingIfNeeded: $0), UInt8($0 >> 8)] }
+            for queryLength in 0...600 {
+                for onlyExact in [false, true] {
+                    let boosts = PackedRadixIndexLayout.rankBoosts(queryCharacters: queryLength, onlyExact: onlyExact)
+                    bytes.withUnsafeBufferPointer { raw in
+                        let actual = PackedRadixIndexLayout.rankUpperBound(
+                            bytes: Span(_unsafeElements: raw), offset: 0, boosts: boosts
+                        )
+                        #expect(actual == bounds.upperBound(queryCharacters: queryLength, onlyExact: onlyExact))
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     func boundsCoverEveryRepresentedScore() {
         for length in [0, 3, 4, 7, 8, 11, 12, 15, 16, 23, 24, 31, 32, 47, 48, 63, 64, 95, 96, 127, 128, 255, 256, 600] {
             for rank: Float in [0, 0.1, 0.9, 1.1, 1.4] {

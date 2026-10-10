@@ -43,11 +43,24 @@ enum PackedRadixIndexLayout {
         return value == emptyRankBound ? -.infinity : Float(value) / rankScale
     }
 
+    static func rankBoosts(queryCharacters: Int, onlyExact: Bool) -> InlineArray<12, Float> {
+        var boosts = InlineArray<12, Float>(repeating: 1.5)
+        if !onlyExact {
+            for index in boosts.indices {
+                boosts[index] = SearchScorer.upperBoost(
+                    minimumLength: max(queryCharacters, rankBinLowerBounds[index]),
+                    queryCharacters: queryCharacters,
+                    onlyExact: false
+                )
+            }
+        }
+        return boosts
+    }
+
     static func rankUpperBound(
         bytes: borrowing Span<UInt8>,
         offset: Int,
-        queryCharacters: Int,
-        onlyExact: Bool
+        boosts: borrowing InlineArray<12, Float>
     ) -> Float {
         var result = -Float.infinity
         for index in 0..<rankBinCount {
@@ -55,16 +68,7 @@ enum PackedRadixIndexLayout {
             guard rank.isFinite else {
                 continue
             }
-            let minimumLength = max(
-                queryCharacters,
-                rankBinLowerBounds[index]
-            )
-            let boost = SearchScorer.upperBoost(
-                minimumLength: minimumLength,
-                queryCharacters: queryCharacters,
-                onlyExact: onlyExact
-            )
-            result = max(result, rank + boost)
+            result = max(result, rank + boosts[index])
         }
         return result
     }
