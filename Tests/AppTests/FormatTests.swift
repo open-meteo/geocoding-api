@@ -29,9 +29,21 @@ struct FormatTests {
         var input = try String(contentsOf: fixture.paths.alternateNamesFile, encoding: .utf8)
         input += "9999\t100\ten\tChosen\t1\t1\t\t\t\t\n"
         input += "10000\t100\ten\tLater\t1\t1\t\t\t\t\n"
+        // Rejected names cross reader refills, including a record larger than its buffer.
+        for index in 0..<300 {
+            let name = String(repeating: "x", count: index == 150 ? 70_000 : 300)
+            input += "\(10001 + index)\t100\ten\t\(name)\t1\t\t\t\t\t\n"
+        }
+        input += "10301\t100\tfr\tChoisi\t1\t1\t\t\t\t\n"
+        input += "10302\t100\tpost\t2000\t\t\t\t\t\t\n"
+        input += "10303\t100\tpost\t1000\t\t\t\t\t\t\n"
+        input += "10304\t100\tpost\t2000\t\t\t\t\t\t\n"
         try input.write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
         let database = try await fixture.build()
         #expect(try database.response(id: 100, languageID: 0)?.name == "Chosen")
+        let french = try #require(database.languageIDs["fr"])
+        #expect(try database.response(id: 100, languageID: french)?.name == "Choisi")
+        #expect(try database.response(id: 100, languageID: 0)?.postcodes == ["2000", "1000", "2000"])
         #expect(
             try database.searchIndex.search(
                 "Later",

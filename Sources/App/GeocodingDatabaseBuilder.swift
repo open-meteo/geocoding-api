@@ -421,37 +421,35 @@ final class GeocodingDatabaseBuilder {
 
         let sortedReader = try BinaryRecordReader(url: sorted, headerSize: 20, lengthOffset: 8)
         var previousAlternate: UInt64?
-        while let record = try sortedReader.next() {
-            try record.withUnsafeBytes { bytes in
-                let row = Int(bytes.readUInt32(at: 0))
-                let language = bytes.readUInt16(at: 4)
-                let key = UInt64(row) << 16 | UInt64(language)
-                if bytes[6] == 0 {
-                    guard previousAlternate != key else { return }
-                    previousAlternate = key
-                    guard alternateCounts[row] < UInt16.max else {
-                        throw GeoNamesImportError.tooManyValues("alternate names")
-                    }
-                    if alternateCounts[row] == 0 { alternateStarts[row] = alternateRecordCount }
-                    alternateCounts[row] += 1
-                    let offset = try alternateStrings.currentUInt32Offset()
-                    try alternateStrings.write(UInt32(bytes.count - 20))
-                    try alternateStrings.write(UnsafeRawBufferPointer(rebasing: bytes[20...]))
-                    try alternateRecords.write(language)
-                    try alternateRecords.write(offset)
-                    alternateRecordCount += 1
-                } else {
-                    guard postcodeCounts[row] < UInt16.max else { throw GeoNamesImportError.tooManyValues("postcodes") }
-                    if postcodeCounts[row] == 0 { postcodeStarts[row] = postcodeRecordCount }
-                    postcodeCounts[row] += 1
-                    let offset = try postcodeStrings.currentUInt32Offset()
-                    try postcodeStrings.write(UInt32(bytes.count - 20))
-                    try postcodeStrings.write(UnsafeRawBufferPointer(rebasing: bytes[20...]))
-                    try postcodeOffsets.write(offset)
-                    postcodeRecordCount += 1
+        while try sortedReader.withNextRecord({ bytes -> Void in
+            let row = Int(bytes.readUInt32(at: 0))
+            let language = bytes.readUInt16(at: 4)
+            let key = UInt64(row) << 16 | UInt64(language)
+            if bytes[6] == 0 {
+                guard previousAlternate != key else { return }
+                previousAlternate = key
+                guard alternateCounts[row] < UInt16.max else {
+                    throw GeoNamesImportError.tooManyValues("alternate names")
                 }
+                if alternateCounts[row] == 0 { alternateStarts[row] = alternateRecordCount }
+                alternateCounts[row] += 1
+                let offset = try alternateStrings.currentUInt32Offset()
+                try alternateStrings.write(UInt32(bytes.count - 20))
+                try alternateStrings.write(bytes.extracting(20...))
+                try alternateRecords.write(language)
+                try alternateRecords.write(offset)
+                alternateRecordCount += 1
+            } else {
+                guard postcodeCounts[row] < UInt16.max else { throw GeoNamesImportError.tooManyValues("postcodes") }
+                if postcodeCounts[row] == 0 { postcodeStarts[row] = postcodeRecordCount }
+                postcodeCounts[row] += 1
+                let offset = try postcodeStrings.currentUInt32Offset()
+                try postcodeStrings.write(UInt32(bytes.count - 20))
+                try postcodeStrings.write(bytes.extracting(20...))
+                try postcodeOffsets.write(offset)
+                postcodeRecordCount += 1
             }
-        }
+        }) != nil {}
         try fileManager.removeItem(at: sorted)
 
         let alternateRecordsResult = try alternateRecords.close()
