@@ -72,6 +72,33 @@ struct FormatTests {
     }
 
     @Test
+    func hashTailBoundariesAndCopies() {
+        let data = (0..<97).map { UInt8(truncatingIfNeeded: $0 &* 17) }
+        data.withUnsafeBufferPointer { buffer in
+            let bytes = Span(_unsafeElements: buffer)
+            for length in 0...96 {
+                var whole = XXHash64()
+                whole.update(bytes.extracting(0..<length))
+                for split in 0...length {
+                    var prefix = XXHash64()
+                    prefix.update(bytes.extracting(0..<split))
+                    let prefixDigest = prefix.digest()
+                    var copy = prefix
+                    copy.update(bytes.extracting(split..<length))
+                    copy.update(bytes.extracting(0..<0))
+                    #expect(copy.digest() == whole.digest())
+                    #expect(prefix.digest() == prefixDigest)
+                    prefix.update(bytes.extracting(split..<length + 1))
+                    var extended = XXHash64()
+                    extended.update(bytes.extracting(0..<length + 1))
+                    #expect(prefix.digest() == extended.digest())
+                    #expect(copy.digest() == whole.digest())
+                }
+            }
+        }
+    }
+
+    @Test
     func structuralOpenChecksQueryTouchedRanges() async throws {
         let fixture = try DatabaseFixture(count: 65)
         defer { fixture.remove() }

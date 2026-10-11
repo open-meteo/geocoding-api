@@ -42,7 +42,8 @@ struct XXHash64 {
     private var accumulator2 = Self.prime2
     private var accumulator3: UInt64 = 0
     private var accumulator4 = UInt64.max &- Self.prime1 &+ 1
-    private var pending = [UInt8]()
+    private var pending = InlineArray<32, UInt8>(repeating: 0)
+    private var pendingCount = 0
 
     mutating func update(_ bytes: borrowing Span<UInt8>) {
         guard !bytes.isEmpty else {
@@ -51,18 +52,17 @@ struct XXHash64 {
         totalLength &+= UInt64(bytes.count)
         var offset = 0
 
-        if !pending.isEmpty {
-            let required = 32 - pending.count
-            let copied = min(required, bytes.count)
-            bytes.extracting(0..<copied).withUnsafeBufferPointer {
-                pending.append(contentsOf: $0)
+        if pendingCount > 0 {
+            let copied = min(32 - pendingCount, bytes.count)
+            for index in 0..<copied {
+                pending[pendingCount + index] = bytes[index]
             }
+            pendingCount += copied
             offset += copied
-            if pending.count == 32 {
-                pending.withUnsafeBufferPointer {
-                    consumeStripe(Span(_unsafeElements: $0))
-                }
-                pending.removeAll(keepingCapacity: true)
+            if pendingCount == 32 {
+                let stripe = pending
+                consumeStripe(stripe.span)
+                pendingCount = 0
             }
         }
 
@@ -71,8 +71,9 @@ struct XXHash64 {
             offset += 32
         }
         if offset < bytes.count {
-            bytes.extracting(offset..<bytes.count).withUnsafeBufferPointer {
-                pending.append(contentsOf: $0)
+            pendingCount = bytes.count - offset
+            for index in 0..<pendingCount {
+                pending[index] = bytes[offset + index]
             }
         }
     }
@@ -102,25 +103,24 @@ struct XXHash64 {
         }
         hash &+= totalLength
 
-        pending.withUnsafeBytes { bytes in
-            var offset = 0
-            while offset + 8 <= bytes.count {
-                let lane = bytes.readUInt64(at: offset)
-                let mixed = Self.round(0, lane)
-                hash ^= mixed
-                hash = Self.rotateLeft(hash, by: 27) &* Self.prime1 &+ Self.prime4
-                offset += 8
-            }
-            if offset + 4 <= bytes.count {
-                hash ^= UInt64(bytes.readUInt32(at: offset)) &* Self.prime1
-                hash = Self.rotateLeft(hash, by: 23) &* Self.prime2 &+ Self.prime3
-                offset += 4
-            }
-            while offset < bytes.count {
-                hash ^= UInt64(bytes[offset]) &* Self.prime5
-                hash = Self.rotateLeft(hash, by: 11) &* Self.prime1
-                offset += 1
-            }
+        let bytes = pending.span.extracting(0..<pendingCount)
+        var offset = 0
+        while offset + 8 <= bytes.count {
+            let lane = bytes.readUInt64(at: offset)
+            let mixed = Self.round(0, lane)
+            hash ^= mixed
+            hash = Self.rotateLeft(hash, by: 27) &* Self.prime1 &+ Self.prime4
+            offset += 8
+        }
+        if offset + 4 <= bytes.count {
+            hash ^= UInt64(bytes.readUInt32(at: offset)) &* Self.prime1
+            hash = Self.rotateLeft(hash, by: 23) &* Self.prime2 &+ Self.prime3
+            offset += 4
+        }
+        while offset < bytes.count {
+            hash ^= UInt64(bytes[offset]) &* Self.prime5
+            hash = Self.rotateLeft(hash, by: 11) &* Self.prime1
+            offset += 1
         }
 
         hash ^= hash >> 33
