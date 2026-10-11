@@ -20,7 +20,7 @@ struct DatabaseBuildPaths {
     static let `default` = DatabaseBuildPaths(
         geonamesFile: URL(fileURLWithPath: "data/allCountries.txt"),
         alternateNamesFile: URL(fileURLWithPath: "data/alternateNamesV2.txt"),
-        databaseFile: URL(fileURLWithPath: "data/database-v3.bin")
+        databaseFile: URL(fileURLWithPath: "data/database-v1.bin")
     )
 }
 
@@ -124,7 +124,7 @@ final class GeocodingDatabaseBuilder {
         let alternate = try buildAlternateNames(initial: initial)
 
         logger.info(
-            "Geocoding database: write record columns, search candidates, and administrative aliases"
+            "Geocoding database: write location records, search candidates, and administrative aliases"
         )
         let records = try buildRecords(initial: initial, alternate: alternate)
 
@@ -158,7 +158,7 @@ final class GeocodingDatabaseBuilder {
             )
         )
 
-        let output = workspace.appendingPathComponent("database-v3.bin.tmp")
+        let output = workspace.appendingPathComponent("database-v1.bin.tmp")
         try writeContainer(
             output: output,
             artifacts: artifacts,

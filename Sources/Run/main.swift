@@ -7,8 +7,8 @@ import Glibc
 import Darwin
 #endif
 
-#if Xcode
-let projectHome = String(#file[...#file.range(of: "/Sources/")!.lowerBound])
+#if Xcode && os(macOS)
+let projectHome = String(#filePath[...#filePath.range(of: "/Sources/")!.lowerBound])
 FileManager.default.changeCurrentDirectoryPath(projectHome)
 #endif
 

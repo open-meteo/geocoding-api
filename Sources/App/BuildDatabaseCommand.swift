@@ -5,7 +5,7 @@ struct BuildDatabaseCommand: AsyncCommand {
     struct Signature: CommandSignature {
         @Flag(
             name: "force",
-            help: "Replace an existing database-v3.bin after a successful build."
+            help: "Replace an existing database-v1.bin after a successful build."
         )
         var force: Bool
 

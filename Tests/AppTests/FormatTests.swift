@@ -157,6 +157,14 @@ struct FormatTests {
         let fixture = try DatabaseFixture(count: 65)
         defer { fixture.remove() }
         let database = try await fixture.build()
+        let header = try Data(contentsOf: fixture.paths.databaseFile).prefix(64)
+        #expect(Array(header.prefix(8)) == Array("GEOCDV1\0".utf8))
+        header.withUnsafeBytes { bytes in
+            #expect(bytes.readUInt32(at: 8) == 1)
+            #expect(bytes.readUInt32(at: 52) == 1)
+            #expect(bytes.readUInt32(at: 56) == 1)
+        }
+        #expect(DatabaseBuildPaths.default.databaseFile.lastPathComponent == "database-v1.bin")
         let language = try #require(database.languageIDs["en"])
         let place = fixture.places[0]
         let hits = try database.searchIndex.search(

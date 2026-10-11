@@ -110,8 +110,8 @@ private enum FileHeaderLayout {
 }
 
 struct DatabaseFileHeader: Sendable {
-    static let magic = Array("GEOCDV3\u{0}".utf8)
-    static let formatVersion: UInt32 = 3
+    static let magic = Array("GEOCDV1\u{0}".utf8)
+    static let formatVersion: UInt32 = 1
     static let encodedSize = 4096
     static let sectionAlignment: UInt64 = 4096
     static let directoryOffset = 64

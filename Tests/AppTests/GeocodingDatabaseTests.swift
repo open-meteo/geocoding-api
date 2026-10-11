@@ -308,7 +308,7 @@ final class GeocodingDatabaseTests {
     @Test
     func testRejectsInvalidHeader() throws {
         let directory = try makeTemporaryDirectory(name: "invalid")
-        let file = directory.appendingPathComponent("database-v2.bin")
+        let file = directory.appendingPathComponent("database-v1.bin")
         try Data(repeating: 0, count: DatabaseFileHeader.encodedSize).write(to: file)
         #expect {
             try GeocodingDatabase(url: file)
@@ -338,7 +338,7 @@ final class GeocodingDatabaseTests {
         )
         let corruptFile = paths.databaseFile
             .deletingLastPathComponent()
-            .appendingPathComponent("corrupt-database-v2.bin")
+            .appendingPathComponent("corrupt-database-v1.bin")
         try contents.write(to: corruptFile)
 
         #expect {
@@ -508,7 +508,7 @@ final class GeocodingDatabaseTests {
         let directory = try makeTemporaryDirectory(name: name)
         let geonames = directory.appendingPathComponent("allCountries.txt")
         let alternates = directory.appendingPathComponent("alternateNamesV2.txt")
-        let database = directory.appendingPathComponent("database-v2.bin")
+        let database = directory.appendingPathComponent("database-v1.bin")
         try (geonameRows.joined(separator: "\n") + "\n")
             .data(using: .utf8)!
             .write(to: geonames)

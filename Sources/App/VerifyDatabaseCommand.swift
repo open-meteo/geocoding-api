@@ -3,7 +3,7 @@ import Vapor
 
 struct VerifyDatabaseCommand: AsyncCommand {
     struct Signature: CommandSignature {
-        @Option(name: "database", help: "Database path (default: data/database-v3.bin)")
+        @Option(name: "database", help: "Database path (default: data/database-v1.bin)")
         var database: String?
     }
     let help = "Fully verify hashes, references, names, and ranking bounds in an immutable database."
