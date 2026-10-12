@@ -104,8 +104,18 @@ field. The remaining record-support sections are:
 
 Search index ID `0` contains canonical and language-neutral/common names. A language-specific
 index uses `languageID + 1`, where `languageID` is the ordinal in `languageStrings`. Names are
-normalized to lowercase, diacritic-insensitive UTF-8 and sorted lexicographically before the
-packed radix trie is written.
+normalized to lowercase, accent-insensitive UTF-8, with Latin letters folded to ASCII
+where possible (`Tromsø` → `tromso`, `Łódź` → `lodz`, `Ærø` → `aero`). Hyphens and
+Unicode dashes match spaces (`Saint-Pétersbourg` → `saint petersbourg`). Other scripts
+are not transliterated to Latin. The final keys use Unicode NFC so canonically equivalent
+spellings have identical bytes. Names are sorted lexicographically before the packed
+radix trie is written. Queries and administrative qualifiers use the same rules; response
+names retain their original spelling.
+
+These rules use normalization version 1. Rebuild databases created with earlier
+experimental normalization rules using `build-database --force`, verify, and restart
+the service. The version check does not distinguish those experimental databases.
+The binary format remains version 1.
 
 | ID | Search section | Record layout |
 |---:|---|---|
