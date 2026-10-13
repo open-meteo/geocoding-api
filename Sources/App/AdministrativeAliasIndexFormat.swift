@@ -5,8 +5,3 @@ enum AdministrativeAliasKind: UInt8, CaseIterable, Hashable {
     case localized
     case abbreviation
 }
-
-enum AdministrativeAliasIndexLayout {
-    static let recordStride = AdministrativeAliasRecordLayout.stride
-    static let candidateStride = AdministrativeAliasCandidateLayout.stride
-}

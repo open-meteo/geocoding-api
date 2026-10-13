@@ -120,13 +120,13 @@ struct AdministrativeAreaResolver: Sendable {
 
         let records = database.sectionBytes(.administrativeAliasRecords)
         let candidates = database.sectionBytes(.administrativeAliasCandidates)
-        let offset = record * AdministrativeAliasIndexLayout.recordStride
+        let offset = record * AdministrativeAliasRecordLayout.stride
         let start = Int(records.readUInt32(at: offset + AdministrativeAliasRecordLayout.candidateStart))
         let count = Int(records.readUInt16(at: offset + AdministrativeAliasRecordLayout.candidateCount))
         guard
             candidates.containsRange(
-                offset: start * AdministrativeAliasIndexLayout.candidateStride,
-                length: count * AdministrativeAliasIndexLayout.candidateStride
+                offset: start * AdministrativeAliasCandidateLayout.stride,
+                length: count * AdministrativeAliasCandidateLayout.stride
             )
         else {
             throw DatabaseFormatError.invalidSection(.administrativeAliasCandidates, "invalid alias candidate range")
@@ -134,7 +134,7 @@ struct AdministrativeAreaResolver: Sendable {
         var result = Resolution()
         for index in start..<start + count {
             let candidateOffset =
-                index * AdministrativeAliasIndexLayout.candidateStride
+                index * AdministrativeAliasCandidateLayout.stride
             let country = candidates.readUInt16(at: candidateOffset + AdministrativeAliasCandidateLayout.country)
             guard countryFilter == nil || countryFilter == country else {
                 continue
@@ -159,7 +159,7 @@ struct AdministrativeAreaResolver: Sendable {
     ) throws -> Int {
         let records = database.sectionBytes(.administrativeAliasRecords)
         let strings = database.sectionBytes(.administrativeAliasStrings)
-        let offset = index * AdministrativeAliasIndexLayout.recordStride
+        let offset = index * AdministrativeAliasRecordLayout.stride
         let candidateKind = records[offset + AdministrativeAliasRecordLayout.kind]
         if candidateKind != kind.rawValue {
             return candidateKind < kind.rawValue ? -1 : 1

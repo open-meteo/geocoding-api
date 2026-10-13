@@ -13,12 +13,12 @@ extension GeocodingDatabase {
         var nameBases = [UInt16: Int]()
 
         func nameSummary(_ ordinal: Int, country: UInt16? = nil, admin: UInt32? = nil) throws -> (Float, UInt16) {
-            let offset = ordinal * PackedRadixIndexLayout.nameMetadataStride
+            let offset = ordinal * NameMetadataLayout.stride
             let start = Int(metadata.readUInt32(at: offset + NameMetadataLayout.postingStart))
             let count = Int(metadata.readUInt32(at: offset + NameMetadataLayout.postingCount))
             let characters = metadata.readUInt16(at: offset + NameMetadataLayout.characterCount)
             for posting in start..<start + count {
-                let base = posting * PackedRadixIndexLayout.postingStride
+                let base = posting * SearchPostingLayout.stride
                 if let country, postings.readUInt16(at: base + SearchPostingLayout.country) != country { continue }
                 if let admin, postings.readUInt32(at: base + SearchPostingLayout.admin1ID) != admin { continue }
                 return (Float(bitPattern: postings.readUInt32(at: base + SearchPostingLayout.rank)), characters)
@@ -72,7 +72,7 @@ extension GeocodingDatabase {
 
         for index in 0..<Int(header.sections[.searchRoots]!.count) {
             mappedFile.releaseResidentPages()
-            let offset = index * PackedRadixIndexLayout.rootStride
+            let offset = index * RadixRootLayout.stride
             let id = roots.readUInt16(at: offset + RadixRootLayout.indexID)
             let nameBase = Int(roots.readUInt32(at: offset + RadixRootLayout.nameBase))
             let count = Int(roots.readUInt32(at: offset + RadixRootLayout.nameCount))
@@ -97,7 +97,7 @@ extension GeocodingDatabase {
             let entries = sections[entryKind]!
             for index in 0..<Int(header.sections[bucketKind]!.count) {
                 if index.isMultiple(of: 128) { mappedFile.releaseResidentPages() }
-                let offset = index * PackedRadixIndexLayout.areaBucketStride
+                let offset = index * AreaBucketLayout.stride
                 let nameBase = nameBases[buckets.readUInt16(at: offset + AreaBucketLayout.indexID)]!
                 let area = buckets.readUInt32(at: offset + AreaBucketLayout.area)
                 let first = Int(buckets.readUInt32(at: offset + AreaBucketLayout.entryStart))
@@ -108,7 +108,7 @@ extension GeocodingDatabase {
                     leafBase: Int(buckets.readUInt32(at: offset + AreaBucketLayout.treeLeafBase)),
                     itemCount: count
                 ) { item in
-                    let entry = (first + item) * PackedRadixIndexLayout.areaEntryStride
+                    let entry = (first + item) * AreaEntryLayout.stride
                     let ordinal = Int(entries.readUInt32(at: entry + AreaEntryLayout.nameOrdinal))
                     let summary = try nameSummary(
                         nameBase + ordinal,

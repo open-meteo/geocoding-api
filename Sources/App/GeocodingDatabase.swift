@@ -118,24 +118,24 @@ final class GeocodingDatabase: Sendable {
 
         let searchRoots = try fixed(
             .searchRoots,
-            stride: UInt32(PackedRadixIndexLayout.rootStride)
+            stride: UInt32(RadixRootLayout.stride)
         )
         let searchNodes = try fixed(
             .searchNodes,
-            stride: UInt32(PackedRadixIndexLayout.nodeStride)
+            stride: UInt32(RadixNodeLayout.stride)
         )
         let searchEdges = try fixed(
             .searchEdges,
-            stride: UInt32(PackedRadixIndexLayout.edgeStride)
+            stride: UInt32(RadixEdgeLayout.stride)
         )
         let searchLabels = try fixed(.searchEdgeLabels, stride: 1)
         let searchMetadata = try fixed(
             .searchNameMetadata,
-            stride: UInt32(PackedRadixIndexLayout.nameMetadataStride)
+            stride: UInt32(NameMetadataLayout.stride)
         )
         let searchPostings = try fixed(
             .searchPostings,
-            stride: UInt32(PackedRadixIndexLayout.postingStride)
+            stride: UInt32(SearchPostingLayout.stride)
         )
         let searchGlobalTrees = try fixed(
             .searchGlobalTrees,
@@ -143,11 +143,11 @@ final class GeocodingDatabase: Sendable {
         )
         let searchCountryBuckets = try fixed(
             .searchCountryBuckets,
-            stride: UInt32(PackedRadixIndexLayout.areaBucketStride)
+            stride: UInt32(AreaBucketLayout.stride)
         )
         let searchCountryEntries = try fixed(
             .searchCountryEntries,
-            stride: UInt32(PackedRadixIndexLayout.areaEntryStride)
+            stride: UInt32(AreaEntryLayout.stride)
         )
         let searchCountryTrees = try fixed(
             .searchCountryTrees,
@@ -155,11 +155,11 @@ final class GeocodingDatabase: Sendable {
         )
         let searchAdminBuckets = try fixed(
             .searchAdminBuckets,
-            stride: UInt32(PackedRadixIndexLayout.areaBucketStride)
+            stride: UInt32(AreaBucketLayout.stride)
         )
         let searchAdminEntries = try fixed(
             .searchAdminEntries,
-            stride: UInt32(PackedRadixIndexLayout.areaEntryStride)
+            stride: UInt32(AreaEntryLayout.stride)
         )
         let searchAdminTrees = try fixed(
             .searchAdminTrees,
@@ -167,7 +167,7 @@ final class GeocodingDatabase: Sendable {
         )
         let administrativeAliasRecords = try fixed(
             .administrativeAliasRecords,
-            stride: UInt32(AdministrativeAliasIndexLayout.recordStride)
+            stride: UInt32(AdministrativeAliasRecordLayout.stride)
         )
         let administrativeAliasStrings = try fixed(
             .administrativeAliasStrings,
@@ -175,7 +175,7 @@ final class GeocodingDatabase: Sendable {
         )
         let administrativeAliasCandidates = try fixed(
             .administrativeAliasCandidates,
-            stride: UInt32(AdministrativeAliasIndexLayout.candidateStride)
+            stride: UInt32(AdministrativeAliasCandidateLayout.stride)
         )
         if verification == .full {
             try Self.validateSearchIndex(

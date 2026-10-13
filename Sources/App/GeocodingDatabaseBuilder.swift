@@ -1114,7 +1114,7 @@ final class GeocodingDatabaseBuilder {
                 url: recordsURL,
                 length: recordsResult.length,
                 count: UInt64(keys.count),
-                stride: UInt32(AdministrativeAliasIndexLayout.recordStride),
+                stride: UInt32(AdministrativeAliasRecordLayout.stride),
                 hash: recordsResult.hash
             ),
             DatabaseSectionArtifact(
@@ -1130,7 +1130,7 @@ final class GeocodingDatabaseBuilder {
                 url: candidatesURL,
                 length: candidatesResult.length,
                 count: UInt64(candidateCount),
-                stride: UInt32(AdministrativeAliasIndexLayout.candidateStride),
+                stride: UInt32(AdministrativeAliasCandidateLayout.stride),
                 hash: candidatesResult.hash
             ),
         ]

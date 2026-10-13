@@ -4,14 +4,13 @@ import Foundation
 /// 0...47: twelve 32-bit values, 48...57: five 16-bit values,
 /// 58: feature, 59...63: reserved zero bytes.
 struct LocationRecordView {
-    static let stride = LocationRecordLayout.stride
     private let section: MappedDatabaseSection
     private let offset: Int
 
     init(section: MappedDatabaseSection, row: Int) {
-        precondition(section.stride == Self.stride && row >= 0 && row < section.count)
+        precondition(section.stride == LocationRecordLayout.stride && row >= 0 && row < section.count)
         self.section = section
-        offset = row * Self.stride
+        offset = row * LocationRecordLayout.stride
     }
 
     private func u32(_ field: Int) -> UInt32 {

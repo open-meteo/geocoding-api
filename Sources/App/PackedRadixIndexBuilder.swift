@@ -523,21 +523,21 @@ final class PackedRadixIndexBuilder {
             try closeArtifact(
                 kind: .searchRoots,
                 writer: output.rootWriter,
-                stride: UInt32(PackedRadixIndexLayout.rootStride)
+                stride: UInt32(RadixRootLayout.stride)
             )
         )
         artifacts.append(
             try closeArtifact(
                 kind: .searchNodes,
                 writer: output.radix.nodeWriter,
-                stride: UInt32(PackedRadixIndexLayout.nodeStride)
+                stride: UInt32(RadixNodeLayout.stride)
             )
         )
         artifacts.append(
             try closeArtifact(
                 kind: .searchEdges,
                 writer: output.radix.edgeWriter,
-                stride: UInt32(PackedRadixIndexLayout.edgeStride)
+                stride: UInt32(RadixEdgeLayout.stride)
             )
         )
         artifacts.append(
@@ -551,14 +551,14 @@ final class PackedRadixIndexBuilder {
             try closeArtifact(
                 kind: .searchNameMetadata,
                 writer: output.metadataWriter,
-                stride: UInt32(PackedRadixIndexLayout.nameMetadataStride)
+                stride: UInt32(NameMetadataLayout.stride)
             )
         )
         artifacts.append(
             try closeArtifact(
                 kind: .searchPostings,
                 writer: output.postingWriter,
-                stride: UInt32(PackedRadixIndexLayout.postingStride)
+                stride: UInt32(SearchPostingLayout.stride)
             )
         )
         artifacts.append(
@@ -767,12 +767,12 @@ final class PackedRadixIndexBuilder {
             try closeArtifact(
                 kind: bucketSection,
                 writer: bucketWriter,
-                stride: UInt32(PackedRadixIndexLayout.areaBucketStride)
+                stride: UInt32(AreaBucketLayout.stride)
             ),
             try closeArtifact(
                 kind: entrySection,
                 writer: entryWriter,
-                stride: UInt32(PackedRadixIndexLayout.areaEntryStride)
+                stride: UInt32(AreaEntryLayout.stride)
             ),
             try closeArtifact(
                 kind: treeSection,
