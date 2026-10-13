@@ -69,7 +69,7 @@ jobs:
         done
     - name: Build and verify database
       run: |
-        ./geocoding-api build-database --memory-limit-mb 1024
+        ./geocoding-api build-database
         ./geocoding-api verify-database
     - name: Package database
       shell: bash

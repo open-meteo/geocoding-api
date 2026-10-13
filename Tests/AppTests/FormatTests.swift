@@ -190,14 +190,12 @@ struct FormatTests {
     }
 
     @Test
-    func deterministicBuildAndRejectedBudgetPreserveOutput() throws {
+    func deterministicBuildOutput() throws {
         let fixture = try DatabaseFixture(count: 257)
         defer { fixture.remove() }
-        _ = try fixture.build(budget: 64 << 20)
+        _ = try fixture.build()
         let first = try Data(contentsOf: fixture.paths.databaseFile)
-        _ = try fixture.build(budget: 128 << 20, force: true)
-        #expect(try Data(contentsOf: fixture.paths.databaseFile) == first)
-        #expect(throws: DatabaseBuildIOError.self) { _ = try fixture.build(budget: 1 << 20, force: true) }
+        _ = try fixture.build(force: true)
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == first)
     }
 
@@ -251,20 +249,17 @@ struct FormatTests {
     }
 
     @Test
-    func boundedRunsWithMultipleMergePasses() throws {
+    func mappedSortOrdersFixedRecords() throws {
         let fixture = try DatabaseFixture(count: 0)
         defer { fixture.remove() }
         let input = fixture.directory.appendingPathComponent("sort-input")
         let writer = try BufferedBinaryWriter(url: input)
-        for value in stride(from: 600_000, through: 0, by: -1) { try writer.write(UInt32(value)) }
+        for value in stride(from: 1024, through: 0, by: -1) { try writer.write(UInt32(value)) }
         _ = try writer.close()
-        let sorted = try ExternalSort.sort(
-            inputs: [input],
-            workspace: fixture.directory,
-            label: "test",
-            headerSize: 4,
-            memoryBytes: 8 << 20,
-            fanIn: 2
+        let sorted = try MappedRecordSort.sort(
+            input: input,
+            output: fixture.directory.appendingPathComponent("sorted"),
+            headerSize: 4
         ) {
             $0.readUInt32(at: 0) < $1.readUInt32(at: 0)
         }
@@ -272,10 +267,10 @@ struct FormatTests {
         var expected: UInt32 = 0
         while let record = try reader.next() {
             let actual = record.withUnsafeBytes { $0.readUInt32(at: 0) }
-            guard actual == expected else { Issue.record("external merge out of order"); return }
+            guard actual == expected else { Issue.record("mapped sort out of order"); return }
             expected += 1
         }
-        #expect(expected == 600_001)
+        #expect(expected == 1025)
     }
 
     @Test
@@ -318,35 +313,42 @@ struct FormatTests {
     }
 
     @Test
-    func largeRecordsLimitMergeFanIn() throws {
+    func mappedSortPreservesVariableRecordsAndEqualKeyOrder() throws {
         let fixture = try DatabaseFixture(count: 0)
         defer { fixture.remove() }
-        let input = fixture.directory.appendingPathComponent("large-records")
+        let input = fixture.directory.appendingPathComponent("variable-sort")
+        let output = fixture.directory.appendingPathComponent("sorted")
+        // Equal keys preserve source order, including empty and large payloads.
+        let records: [(key: UInt32, length: Int)] = [(2, 131_073), (1, 0), (2, 17), (0, 65_536)]
         let writer = try BufferedBinaryWriter(url: input)
-        for key in (0..<9).reversed() {
-            try writer.write(UInt32(key))
-            try writer.write(UInt32(1 << 20))
-            try writer.write(Data(repeating: UInt8(key), count: 1 << 20))
+        for (key, length) in records {
+            try writer.write(key)
+            try writer.write(UInt32(length))
+            try writer.write(Data(repeating: UInt8(key), count: length))
         }
         _ = try writer.close()
-        let sorted = try ExternalSort.sort(
-            inputs: [input],
-            workspace: fixture.directory,
-            label: "large",
-            headerSize: 8,
-            lengthOffset: 4,
-            memoryBytes: 8 << 20
-        ) {
+        _ = try MappedRecordSort.sort(input: input, output: output, headerSize: 8, lengthOffset: 4) {
             $0.readUInt32(at: 0) < $1.readUInt32(at: 0)
         }
-        let reader = try BinaryRecordReader(url: sorted, headerSize: 8, lengthOffset: 4)
-        for key in 0..<9 {
+        let reader = try BinaryRecordReader(url: output, headerSize: 8, lengthOffset: 4)
+        for (key, length) in [records[3], records[1], records[0], records[2]] {
             let record = try #require(try reader.next())
-            #expect(record.withUnsafeBytes { $0.readUInt32(at: 0) } == UInt32(key))
-            #expect(record.count == (1 << 20) + 8)
+            #expect(record.withUnsafeBytes { $0.readUInt32(at: 0) } == key)
+            #expect(record.count == length + 8)
             #expect(record.dropFirst(8).allSatisfy { $0 == UInt8(key) })
         }
         #expect(try reader.next() == nil)
+
+        // Validate lengths before passing any record to the sorting comparator.
+        for data in [Data([0, 1, 2]), Data(repeating: 255, count: 8), Data([0, 0, 0, 0, 1, 0, 0, 0])] {
+            try data.write(to: input)
+            #expect(throws: DatabaseBuildIOError.self) {
+                try MappedRecordSort.sort(input: input, output: output, headerSize: 8, lengthOffset: 4) { _, _ in false }
+            }
+        }
+        try Data().write(to: input)
+        _ = try MappedRecordSort.sort(input: input, output: output, headerSize: 8, lengthOffset: 4) { _, _ in false }
+        #expect(try Data(contentsOf: output).isEmpty)
     }
 
     @Test

@@ -482,17 +482,14 @@ private final class SearchIndexSectionWriter {
 final class PackedRadixIndexBuilder {
     private let workspace: URL
     private let source: URL
-    private let memoryLimitBytes: Int
     private let fileManager = FileManager.default
 
     init(
         workspace: URL,
-        source: URL,
-        memoryLimitBytes: Int
+        source: URL
     ) {
         self.workspace = workspace
         self.source = source
-        self.memoryLimitBytes = memoryLimitBytes
     }
 
     func build() throws -> [DatabaseSectionArtifact] {
@@ -557,7 +554,7 @@ final class PackedRadixIndexBuilder {
         artifacts.append(
             contentsOf: try buildAreaView(
                 kind: "country",
-                partitions: [output.countryViewWriter.url],
+                source: output.countryViewWriter.url,
                 bucketSection: .searchCountryBuckets,
                 entrySection: .searchCountryEntries,
                 treeSection: .searchCountryTrees
@@ -566,7 +563,7 @@ final class PackedRadixIndexBuilder {
         artifacts.append(
             contentsOf: try buildAreaView(
                 kind: "admin",
-                partitions: [output.adminViewWriter.url],
+                source: output.adminViewWriter.url,
                 bucketSection: .searchAdminBuckets,
                 entrySection: .searchAdminEntries,
                 treeSection: .searchAdminTrees
@@ -576,13 +573,11 @@ final class PackedRadixIndexBuilder {
     }
 
     private func sortCandidates() throws -> URL {
-        let run = try ExternalSort.sort(
-            inputs: [source],
-            workspace: workspace,
-            label: "search",
+        let run = try MappedRecordSort.sort(
+            input: source,
+            output: workspace.appendingPathComponent("search-sorted.tmp"),
             headerSize: SearchCandidateLayout.stride,
-            lengthOffset: SearchCandidateLayout.byteCount,
-            memoryBytes: memoryLimitBytes
+            lengthOffset: SearchCandidateLayout.byteCount
         ) { lhs, rhs in
             let leftID = lhs.readUInt16(at: SearchCandidateLayout.indexID)
             let rightID = rhs.readUInt16(at: SearchCandidateLayout.indexID)
@@ -639,7 +634,7 @@ final class PackedRadixIndexBuilder {
 
     private func buildAreaView(
         kind: String,
-        partitions: [URL],
+        source: URL,
         bucketSection: DatabaseSectionKind,
         entrySection: DatabaseSectionKind,
         treeSection: DatabaseSectionKind
@@ -654,12 +649,10 @@ final class PackedRadixIndexBuilder {
         var treeNodeCount: UInt32 = 0
         var buckets = [AreaOrdinalView]()
 
-        let sorted = try ExternalSort.sort(
-            inputs: partitions,
-            workspace: workspace,
-            label: "view-\(kind)",
-            headerSize: OrdinalViewLayout.stride,
-            memoryBytes: memoryLimitBytes
+        let sorted = try MappedRecordSort.sort(
+            input: source,
+            output: workspace.appendingPathComponent("view-\(kind)-sorted.tmp"),
+            headerSize: OrdinalViewLayout.stride
         ) { lhs, rhs in
             if lhs.readUInt16(at: OrdinalViewLayout.indexID) != rhs.readUInt16(at: OrdinalViewLayout.indexID) {
                 return lhs.readUInt16(at: OrdinalViewLayout.indexID) < rhs.readUInt16(at: OrdinalViewLayout.indexID)
@@ -669,7 +662,7 @@ final class PackedRadixIndexBuilder {
             }
             return lhs.readUInt32(at: OrdinalViewLayout.nameOrdinal) < rhs.readUInt32(at: OrdinalViewLayout.nameOrdinal)
         }
-        for url in partitions { try fileManager.removeItem(at: url) }
+        try fileManager.removeItem(at: source)
         let reader = try BinaryRecordReader(url: sorted, headerSize: OrdinalViewLayout.stride)
         func next() throws -> OrdinalViewRecord? {
             try reader.withNextRecord { bytes in

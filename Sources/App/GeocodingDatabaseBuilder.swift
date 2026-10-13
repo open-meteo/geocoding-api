@@ -8,7 +8,6 @@ import Darwin
 #endif
 
 struct DatabaseBuildOptions {
-    var memoryLimitBytes = 1 << 30
     var force = false
 }
 
@@ -38,9 +37,6 @@ private struct GeoNamesScanSummary {
     var includedIDs = DynamicBitSet()
     var idToRow = [UInt32]()
 
-    var managedBytes: Int {
-        (Int(maximumID) + 1) * 4 + Int(recordCount) * 12 + (Int(maximumID) + 8) / 8 + (32 << 20)
-    }
     var recordCount: UInt32 = 0
     var maximumID: UInt32 = 0
     var countries = [UInt16: Int32]()
@@ -115,10 +111,7 @@ final class GeocodingDatabaseBuilder {
             "Geocoding database: selected \(initial.recordCount) records; maximum ID \(initial.maximumID)"
         )
 
-        logger.info(
-            "Geocoding database: reserved managed memory \(initial.managedBytes >> 20) MiB; sort workspace \((options.memoryLimitBytes - initial.managedBytes) >> 20) MiB"
-        )
-        logger.info("Geocoding database: partition and reduce alternate names")
+        logger.info("Geocoding database: sort and reduce alternate names")
         let alternate = try buildAlternateNames(initial: initial)
 
         logger.info(
@@ -129,8 +122,7 @@ final class GeocodingDatabaseBuilder {
         logger.info("Geocoding database: build packed search index")
         let searchArtifacts = try PackedRadixIndexBuilder(
             workspace: workspace,
-            source: records.searchCandidates,
-            memoryLimitBytes: options.memoryLimitBytes - initial.managedBytes
+            source: records.searchCandidates
         ).build()
 
         var artifacts = alternate.artifacts
@@ -220,16 +212,6 @@ final class GeocodingDatabaseBuilder {
             }
             guard !result.includedIDs.contains(unsignedID) else {
                 throw DatabaseFormatError.invalidHeader("duplicate GeoNames ID")
-            }
-            let denseBytes = (Int(max(result.maximumID, unsignedID)) + 1) * 4
-            let rowBytes = (Int(result.recordCount) + 1) * 16
-            let minimum = denseBytes + rowBytes + (Int(unsignedID) + 8) / 8 + 41_943_040
-            guard minimum <= options.memoryLimitBytes else {
-                throw DatabaseBuildIOError.write(
-                    path: paths.databaseFile.path,
-                    message:
-                        "Memory budget is too small; at least \((minimum + (1 << 20) - 1) >> 20) MiB required for records and an 8 MiB sort workspace"
-                )
             }
             ids.append(unsignedID)
             result.includedIDs.insert(unsignedID)
@@ -382,13 +364,11 @@ final class GeocodingDatabaseBuilder {
             try writer.write(name)
         }
         _ = try inputWriter.close()
-        let sorted = try ExternalSort.sort(
-            inputs: [unsorted],
-            workspace: workspace,
-            label: "alternate",
+        let sorted = try MappedRecordSort.sort(
+            input: unsorted,
+            output: workspace.appendingPathComponent("alternate-sorted.tmp"),
             headerSize: AlternateInputLayout.stride,
-            lengthOffset: AlternateInputLayout.byteCount,
-            memoryBytes: options.memoryLimitBytes - initial.managedBytes
+            lengthOffset: AlternateInputLayout.byteCount
         ) { lhs, rhs in
             if lhs.readUInt32(at: AlternateInputLayout.row) != rhs.readUInt32(at: AlternateInputLayout.row) {
                 return lhs.readUInt32(at: AlternateInputLayout.row) < rhs.readUInt32(at: AlternateInputLayout.row)

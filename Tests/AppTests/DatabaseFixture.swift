@@ -80,20 +80,20 @@ struct DatabaseFixture {
         ].joined(separator: "\t")
     }
 
-    func build(budget: Int = 64 << 20, force: Bool = false) throws -> GeocodingDatabase {
-        try paths.build(budget: budget, force: force)
+    func build(force: Bool = false) throws -> GeocodingDatabase {
+        try paths.build(force: force)
     }
 
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }
 
 extension DatabaseBuildPaths {
-    func build(budget: Int = 64 << 20, force: Bool = false) throws -> GeocodingDatabase {
+    func build(force: Bool = false) throws -> GeocodingDatabase {
         var logger = Logger(label: "fixture")
         logger.logLevel = .error
         try GeocodingDatabaseBuilder(
             logger: logger,
-            options: .init(memoryLimitBytes: budget, force: force),
+            options: .init(force: force),
             paths: self
         ).build()
         return try GeocodingDatabase(url: databaseFile)

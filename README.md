@@ -182,7 +182,7 @@ unzip -o data/allCountries.zip -d data
 unzip -o data/alternateNamesV2.zip -d data
 
 swift build -c release --product Run
-.build/release/Run build-database --memory-limit-mb 1024
+.build/release/Run build-database
 .build/release/Run verify-database
 .build/release/Run serve --env production --hostname 0.0.0.0 --port 8080
 ```
@@ -192,14 +192,17 @@ both use `data/database-v1.bin`. Startup opens this prebuilt file; a missing or 
 file makes startup fail with instructions to build and verify it. Source files being present
 does not trigger an automatic build.
 
-The builder streams the TSV inputs, partitions temporary data, and sorts runs sequentially.
-`--memory-limit-mb` controls the approximate managed-memory budget, excluding mapped pages;
-it is not a hard process-memory limit. The default is 1024 MiB. The builder fully validates
-a temporary output before atomically renaming it into place. An existing target is preserved
+The builder streams the TSV inputs and stores temporary candidates in files. It sorts
+record offsets in memory over read-only mappings, then writes each sorted stage
+sequentially. Offsets use 8 bytes per record on supported 64-bit platforms, plus array
+capacity and sorting scratch. Candidate payloads remain file-backed, but mapped pages
+also consume memory; peak usage depends on the dataset and is not capped by a budget.
+The builder fully validates a temporary output before atomically renaming it into place.
+An existing target is preserved
 unless `--force` is supplied:
 
 ```bash
-.build/release/Run build-database --force --memory-limit-mb 1024
+.build/release/Run build-database --force
 .build/release/Run verify-database --database data/database-v1.bin
 ```
 
@@ -209,7 +212,7 @@ than renaming an old database. Normalization and scoring versions are also check
 Restart the service after publishing a replacement so it opens the new immutable file.
 
 No full-dataset build-time or memory baseline has been established for this final layout.
-Measure using your dataset, hardware, and memory budget; earlier experimental timings are
+Measure using your dataset and hardware; earlier experimental timings are
 not representative guarantees for this format.
 
 ### Service deployment
