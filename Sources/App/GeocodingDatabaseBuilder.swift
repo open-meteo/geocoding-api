@@ -130,7 +130,6 @@ final class GeocodingDatabaseBuilder {
 
         logger.info("Geocoding database: build packed search index")
         let searchArtifacts = try PackedRadixIndexBuilder(
-            logger: logger,
             workspace: workspace,
             source: records.searchCandidates,
             memoryLimitBytes: options.memoryLimitBytes - initial.managedBytes

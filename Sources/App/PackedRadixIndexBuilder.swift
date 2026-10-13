@@ -494,19 +494,16 @@ private final class SearchIndexSectionWriter {
 }
 
 final class PackedRadixIndexBuilder {
-    private let logger: Logger
     private let workspace: URL
     private let source: URL
     private let memoryLimitBytes: Int
     private let fileManager = FileManager.default
 
     init(
-        logger: Logger,
         workspace: URL,
         source: URL,
         memoryLimitBytes: Int
     ) {
-        self.logger = logger
         self.workspace = workspace
         self.source = source
         self.memoryLimitBytes = memoryLimitBytes
