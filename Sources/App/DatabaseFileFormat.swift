@@ -26,7 +26,7 @@ enum DatabaseFormatError: Error, CustomStringConvertible {
     }
 }
 
-enum DatabaseSectionKind: UInt32, CaseIterable, CustomStringConvertible, Sendable {
+enum DatabaseSectionKind: UInt32, CustomStringConvertible, Sendable {
     case idToRow = 1
     case locations = 2
     case canonicalStrings = 21
@@ -72,7 +72,7 @@ private enum SectionDescriptorLayout {
     static let hash = 40
 }
 
-struct DatabaseSectionDescriptor: Equatable, Sendable {
+struct DatabaseSectionDescriptor: Sendable {
     static let encodedSize = 48
 
     let kind: DatabaseSectionKind
