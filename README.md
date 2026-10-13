@@ -100,7 +100,6 @@ field. The remaining record-support sections are:
 | 24 | `postcodeOffsets` | `u32` offsets into `postcodeStrings` |
 | 25 | `postcodeStrings` | Length-prefixed UTF-8 string pool |
 | 26–28 | `featureStrings`, `timezoneStrings`, `languageStrings` | Sequential length-prefixed UTF-8 tables; descriptor `count` is the number of strings |
-| 29–30 | `geoOrdered`, `geoValues` | Reserved for a future spatial index; currently not emitted |
 
 Search index ID `0` contains canonical and language-neutral/common names. A language-specific
 index uses `languageID + 1`, where `languageID` is the ordinal in `languageStrings`. Names are

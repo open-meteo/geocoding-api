@@ -37,8 +37,6 @@ enum DatabaseSectionKind: UInt32, CustomStringConvertible, Sendable {
     case featureStrings = 26
     case timezoneStrings = 27
     case languageStrings = 28
-    case geoOrdered = 29
-    case geoValues = 30
     case searchRoots = 31
     case searchNodes = 32
     case searchEdges = 33
