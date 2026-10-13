@@ -101,11 +101,9 @@ private struct SearchPathKeySet {
     }
 }
 
-private typealias RankedSearchResult = SearchHit
-
 private struct TopKResultHeap {
     let capacity: Int
-    private var heap = [RankedSearchResult]()
+    private var heap = [SearchHit]()
 
     init(capacity: Int) {
         self.capacity = capacity
@@ -115,7 +113,7 @@ private struct TopKResultHeap {
         return heap.count >= capacity
     }
 
-    var worst: RankedSearchResult? {
+    var worst: SearchHit? {
         return heap.first
     }
 
@@ -130,14 +128,14 @@ private struct TopKResultHeap {
             siftDown(from: index)
             return
         }
-        let value = RankedSearchResult(row: row, id: id, score: score)
+        let value = SearchHit(row: row, id: id, score: score)
         if heap.count < capacity {
             if heap.isEmpty { heap.reserveCapacity(capacity) }
             heap.append(value)
             siftUp(from: heap.count - 1)
             return
         }
-        guard let worst, isBetter(value, than: worst) else {
+        guard let worst, isWorse(worst, than: value) else {
             return
         }
         heap[0] = value
@@ -150,19 +148,11 @@ private struct TopKResultHeap {
         }
     }
 
-    private func isWorse(_ lhs: RankedSearchResult, than rhs: RankedSearchResult) -> Bool {
+    private func isWorse(_ lhs: SearchHit, than rhs: SearchHit) -> Bool {
         if lhs.score != rhs.score {
             return lhs.score < rhs.score
         }
         return lhs.id > rhs.id
-    }
-
-    private func isBetter(_ lhs: RankedSearchResult, than rhs: RankedSearchResult) -> Bool {
-        return isWorse(rhs, than: lhs)
-    }
-
-    private mutating func swap(_ lhs: Int, _ rhs: Int) {
-        heap.swapAt(lhs, rhs)
     }
 
     private mutating func siftUp(from start: Int) {
@@ -172,7 +162,7 @@ private struct TopKResultHeap {
             guard isWorse(heap[index], than: heap[parent]) else {
                 break
             }
-            swap(index, parent)
+            heap.swapAt(index, parent)
             index = parent
         }
     }
@@ -191,7 +181,7 @@ private struct TopKResultHeap {
             guard isWorse(heap[child], than: heap[index]) else {
                 break
             }
-            swap(index, child)
+            heap.swapAt(index, child)
             index = child
         }
     }
@@ -805,7 +795,7 @@ final class PackedRadixSearchIndex: Sendable {
             }
             let metadataOffset = (Int(path.root.nameBase) + Int(ordinal)) * PackedRadixIndexLayout.nameMetadataStride
             let characterCount = Int(metadata.readUInt16(at: metadataOffset + NameMetadataLayout.characterCount))
-            let boost = scoreBoost(
+            let boost = SearchScorer.boost(
                 characterCount: characterCount,
                 queryCharacters: queryCharacters,
                 isExact: ordinal == path.terminal
@@ -867,14 +857,6 @@ final class PackedRadixSearchIndex: Sendable {
                 score: score
             )
         }
-    }
-
-    private func scoreBoost(
-        characterCount: Int,
-        queryCharacters: Int,
-        isExact: Bool
-    ) -> Float {
-        SearchScorer.boost(characterCount: characterCount, queryCharacters: queryCharacters, isExact: isExact)
     }
 
     private func areaBucket(
