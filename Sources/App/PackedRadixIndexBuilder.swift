@@ -64,7 +64,6 @@ private final class CandidateRunCursor {
     }
 
     func withName<Result>(
-        _ value: SearchNameCandidate,
         _ body: (borrowing Span<UInt8>) throws -> Result
     ) rethrows -> Result {
         try record.withUnsafeBytes { bytes in
@@ -617,7 +616,7 @@ final class PackedRadixIndexBuilder {
     private func writeIndex(sortedCandidates: URL, output: SearchIndexSectionWriter) throws {
         let cursor = try CandidateRunCursor(url: sortedCandidates)
         while let first = cursor.candidate {
-            let name = cursor.withName(first) { $0.withUnsafeBufferPointer { Array($0) } }
+            let name = cursor.withName { $0.withUnsafeBufferPointer { Array($0) } }
             try name.withUnsafeBufferPointer { buffer in
                 try output.emitGroup(
                     indexID: first.indexID,
@@ -625,7 +624,7 @@ final class PackedRadixIndexBuilder {
                     characterCount: first.characterCount
                 ) {
                     guard let candidate = cursor.candidate, candidate.indexID == first.indexID else { return nil }
-                    let matches = cursor.withName(candidate) {
+                    let matches = cursor.withName {
                         compareLexicographically($0, Span(_unsafeElements: buffer)) == 0
                     }
                     guard matches else { return nil }
