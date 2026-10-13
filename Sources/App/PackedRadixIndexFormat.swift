@@ -97,26 +97,6 @@ struct LengthBinnedRankBounds {
         }
     }
 
-    func upperBound(queryCharacters: Int, onlyExact: Bool) -> Float {
-        var result = -Float.infinity
-        for index in values.indices {
-            let rank = PackedRadixIndexLayout.decodeRankBound(values[index])
-            guard rank.isFinite else {
-                continue
-            }
-            let minimumLength = max(
-                queryCharacters,
-                PackedRadixIndexLayout.rankBinLowerBounds[index]
-            )
-            let boost = SearchScorer.upperBoost(
-                minimumLength: minimumLength,
-                queryCharacters: queryCharacters,
-                onlyExact: onlyExact
-            )
-            result = max(result, rank + boost)
-        }
-        return result
-    }
 }
 
 struct RadixIndexRoot: Sendable {

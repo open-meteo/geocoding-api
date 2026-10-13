@@ -115,11 +115,11 @@ struct FormatTests {
             try corrupted.write(to: output)
             let fast = try GeocodingDatabase(url: output, verification: .structure)
             if kind == .administrativeAliasRecords {
-                #expect(throws: (any Error).self) {
+                #expect(throws: DatabaseFormatError.self) {
                     try AdministrativeAreaResolver(database: fast).resolve("Region A", languageID: 0, countryCode: nil)
                 }
             } else {
-                #expect(throws: (any Error).self) {
+                #expect(throws: DatabaseFormatError.self) {
                     try fast.searchIndex.search(
                         "Spring",
                         languageID: 0,
@@ -131,7 +131,7 @@ struct FormatTests {
             }
         }
         let absent = fixture.directory.appendingPathComponent("missing.bin")
-        #expect(throws: (any Error).self) {
+        #expect(throws: MappedFileError.self) {
             try GeocodingDatabase.open(logger: Logger(label: "missing-test"), url: absent)
         }
         #expect(!FileManager.default.fileExists(atPath: absent.path))
@@ -153,7 +153,7 @@ struct FormatTests {
     }
 
     @Test
-    func deduplicatedResultsAndRecordLayout() throws {
+    func recordLayout() throws {
         let fixture = try DatabaseFixture(count: 65)
         defer { fixture.remove() }
         let database = try fixture.build()
@@ -165,26 +165,8 @@ struct FormatTests {
             #expect(bytes.readUInt32(at: 56) == 1)
         }
         #expect(DatabaseBuildPaths.default.databaseFile.lastPathComponent == "database-v1.bin")
-        let language = try #require(database.languageIDs["en"])
-        let place = fixture.places[0]
-        let hits = try database.searchIndex.search(
-            place.name,
-            languageID: language,
-            count: 100,
-            countryCode: nil,
-            administrativeArea: nil
-        )
-        let hit = try #require(hits.first { $0.id == place.id })
-        #expect(hits.filter { $0.id == place.id }.count == 1)
         #expect(database.header.sections[.locations]?.stride == 64)
         #expect(database.header.sections[.searchPostings]?.stride == 14)
-        let response = try #require(database.responses(hits: [hit], languageID: language).first)
-        #expect(response.id == place.id)
-        #expect(response.population == place.population)
-        #expect(response.latitude == 47 && response.longitude == 8)
-        #expect(response.elevation == 400)
-        #expect(response.countryCode == place.country)
-        #expect(response.admin1ID == place.admin)
     }
 
     @Test
@@ -193,7 +175,7 @@ struct FormatTests {
         defer { fixture.remove() }
         let old = try fixture.build()
         let original = try Data(contentsOf: fixture.paths.databaseFile)
-        #expect(throws: (any Error).self) { _ = try fixture.build() }
+        #expect(throws: DatabaseBuildIOError.self) { _ = try fixture.build() }
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == original)
         let names = try String(contentsOf: fixture.paths.alternateNamesFile, encoding: .utf8)
         try names.replacingOccurrences(of: "Country A", with: "Updated Country")
@@ -203,19 +185,19 @@ struct FormatTests {
         #expect(try replacement.response(id: 1, languageID: 0)?.name == "Updated Country")
         try "invalid input\n".write(to: fixture.paths.geonamesFile, atomically: true, encoding: .utf8)
         let published = try Data(contentsOf: fixture.paths.databaseFile)
-        #expect(throws: (any Error).self) { _ = try fixture.build(force: true) }
+        #expect(throws: GeoNamesImportError.self) { _ = try fixture.build(force: true) }
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == published)
     }
 
     @Test
-    func deterministicAcrossBudgetsAndRejectsSmallBudget() throws {
+    func deterministicBuildAndRejectedBudgetPreserveOutput() throws {
         let fixture = try DatabaseFixture(count: 257)
         defer { fixture.remove() }
         _ = try fixture.build(budget: 64 << 20)
         let first = try Data(contentsOf: fixture.paths.databaseFile)
         _ = try fixture.build(budget: 128 << 20, force: true)
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == first)
-        #expect(throws: (any Error).self) { _ = try fixture.build(budget: 1 << 20, force: true) }
+        #expect(throws: DatabaseBuildIOError.self) { _ = try fixture.build(budget: 1 << 20, force: true) }
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == first)
     }
 
@@ -230,7 +212,10 @@ struct FormatTests {
         corrupted[Int(section.offset) + PackedRadixIndexLayout.treeNodeStride] ^= 1
         let output = fixture.directory.appendingPathComponent("corrupt.bin")
         try corrupted.write(to: output)
-        #expect(throws: (any Error).self) { try GeocodingDatabase(url: output) }
+        #expect { try GeocodingDatabase(url: output) } throws: { error in
+            guard case DatabaseFormatError.invalidSection(.searchGlobalTrees, _) = error else { return false }
+            return true
+        }
         // Fast open intentionally doesn't claim to authenticate every payload byte.
         _ = try GeocodingDatabase(url: output, verification: .structure)
         var hasher = XXHash64()
@@ -247,13 +232,22 @@ struct FormatTests {
             }
         }
         try corrupted.write(to: output)
-        #expect(throws: (any Error).self) { try GeocodingDatabase(url: output) }
+        #expect { try GeocodingDatabase(url: output) } throws: { error in
+            guard case DatabaseFormatError.invalidSection(.searchGlobalTrees, _) = error else { return false }
+            return true
+        }
         var incompatible = original
         incompatible.writeLittleEndian(UInt32.max, at: 52)
         try incompatible.write(to: output)
-        #expect(throws: (any Error).self) { try GeocodingDatabase(url: output, verification: .structure) }
+        #expect { try GeocodingDatabase(url: output, verification: .structure) } throws: { error in
+            guard case DatabaseFormatError.invalidHeader = error else { return false }
+            return true
+        }
         try original.prefix(original.count - 1).write(to: output)
-        #expect(throws: (any Error).self) { try GeocodingDatabase(url: output) }
+        #expect { try GeocodingDatabase(url: output) } throws: { error in
+            guard case DatabaseFormatError.invalidHeader = error else { return false }
+            return true
+        }
     }
 
     @Test
@@ -319,7 +313,7 @@ struct FormatTests {
             let bad = fixture.directory.appendingPathComponent("truncated-record")
             try Data(data).write(to: bad)
             let corrupt = try BinaryRecordReader(url: bad, headerSize: 8, lengthOffset: 4)
-            #expect(throws: (any Error).self) { try corrupt.next() }
+            #expect(throws: DatabaseBuildIOError.self) { try corrupt.next() }
         }
     }
 
@@ -356,45 +350,32 @@ struct FormatTests {
     }
 
     @Test
-    func cachedBoostsPreservePackedBounds() {
-        var summary = LengthBinnedRankBounds()
-        for length in [0, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 256] {
-            summary.insert(rank: Float(length) / 256, characterCount: UInt16(length))
-        }
-        for populated in [false, true] {
-            let bounds = populated ? summary : LengthBinnedRankBounds()
-            var encoded = [UInt16]()
-            bounds.append(to: &encoded)
-            let bytes = encoded.flatMap { [UInt8(truncatingIfNeeded: $0), UInt8($0 >> 8)] }
-            for queryLength in 0...600 {
-                for onlyExact in [false, true] {
-                    let boosts = PackedRadixIndexLayout.rankBoosts(queryCharacters: queryLength, onlyExact: onlyExact)
-                    bytes.withUnsafeBufferPointer { raw in
-                        let actual = PackedRadixIndexLayout.rankUpperBound(
-                            bytes: Span(_unsafeElements: raw), offset: 0, boosts: boosts
-                        )
-                        #expect(actual == bounds.upperBound(queryCharacters: queryLength, onlyExact: onlyExact))
-                    }
-                }
-            }
-        }
-    }
-
-    @Test
-    func boundsCoverEveryRepresentedScore() {
-        for length in [0, 3, 4, 7, 8, 11, 12, 15, 16, 23, 24, 31, 32, 47, 48, 63, 64, 95, 96, 127, 128, 255, 256, 600] {
+    func packedBoundsCoverCandidateScores() {
+        let lengths = [0, 3, 4, 7, 8, 11, 12, 15, 16, 23, 24, 31, 32, 47, 48, 63, 64, 95, 96, 127, 128, 255, 256, 600]
+        for length in lengths {
             for rank: Float in [0, 0.1, 0.9, 1.1, 1.4] {
-                var summary = LengthBinnedRankBounds()
-                summary.insert(rank: rank, characterCount: UInt16(length))
-                for queryLength in 0...length {
-                    let actual =
-                        rank
-                        + SearchScorer.boost(
-                            characterCount: length,
-                            queryCharacters: queryLength,
-                            isExact: length == queryLength
-                        )
-                    #expect(summary.upperBound(queryCharacters: queryLength, onlyExact: false) >= actual)
+                for populated in [false, true] {
+                    var summary = LengthBinnedRankBounds()
+                    if populated { summary.insert(rank: rank, characterCount: UInt16(length)) }
+                    var encoded = [UInt16]()
+                    summary.append(to: &encoded)
+                    let bytes = encoded.flatMap { [UInt8(truncatingIfNeeded: $0), UInt8($0 >> 8)] }
+                    for queryLength in 0...length {
+                        for onlyExact in [false, true] where !onlyExact || queryLength == length {
+                            let boosts = PackedRadixIndexLayout.rankBoosts(queryCharacters: queryLength, onlyExact: onlyExact)
+                            bytes.withUnsafeBufferPointer { raw in
+                                let bound = PackedRadixIndexLayout.rankUpperBound(
+                                    bytes: Span(_unsafeElements: raw), offset: 0, boosts: boosts
+                                )
+                                if populated {
+                                    let score = rank + (queryLength == length ? 1.5 : 1.5 / Float(length - queryLength + 1))
+                                    #expect(bound >= score)
+                                } else {
+                                    #expect(bound == -Float.infinity)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

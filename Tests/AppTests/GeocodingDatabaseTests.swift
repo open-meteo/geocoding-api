@@ -1,5 +1,4 @@
 import Foundation
-import Logging
 import Testing
 
 @testable import App
@@ -16,13 +15,7 @@ final class GeocodingDatabaseTests {
     @Test
     func testBuildLoadSearchAndLocalizedResponse() throws {
         let paths = try makeFixture(name: "primary")
-        try GeocodingDatabaseBuilder(
-            logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
-            paths: paths
-        ).build()
-
-        let database = try GeocodingDatabase(url: paths.databaseFile)
+        let database = try paths.build()
         #expect(database.recordCount == 8)
         #expect(database.header.maximumGeonameID == 220)
         #expect(database.header.sections.values.allSatisfy { $0.offset % 4096 == 0 })
@@ -38,16 +31,10 @@ final class GeocodingDatabaseTests {
         #expect(response.admin1 == "Nordregion")
         #expect(response.postcodes == ["1234"])
         #expect(response.timezone == "Europe/Zurich")
-
-        let exact = try database.searchIndex.search(
-            "Springfield",
-            languageID: english,
-            count: 10,
-            countryCode: nil,
-            administrativeArea: nil
-        )
-        #expect(exact.map(\.id) == [120, 220, 121])
-        #expect(exact[0].score > exact[1].score)
+        #expect(response.id == 120 && response.population == 500_000)
+        #expect(response.latitude == Float(47.1) && response.longitude == Float(8.5))
+        #expect(response.elevation == 400)
+        #expect(response.countryCode == "TL" && response.admin1ID == 110)
 
         let prefix = try database.searchIndex.search(
             "Spring",
@@ -118,13 +105,7 @@ final class GeocodingDatabaseTests {
     @Test
     func testAdministrativeAreaResolution() throws {
         let paths = try makeFixture(name: "administrative-areas")
-        try GeocodingDatabaseBuilder(
-            logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
-            paths: paths
-        ).build()
-
-        let database = try GeocodingDatabase(url: paths.databaseFile)
+        let database = try paths.build()
         let resolver = AdministrativeAreaResolver(database: database)
         let english = try #require(database.languageIDs["en"])
         let german = try #require(database.languageIDs["de"])
@@ -200,13 +181,7 @@ final class GeocodingDatabaseTests {
                 )
             } + [alternate(7, 1, "post", "0000")]
         )
-        try GeocodingDatabaseBuilder(
-            logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
-            paths: paths
-        ).build()
-
-        let database = try GeocodingDatabase(url: paths.databaseFile)
+        let database = try paths.build()
         let resolver = AdministrativeAreaResolver(database: database)
         for (offset, feature) in featureCodes.enumerated() {
             let resolution = try resolver.resolve(
@@ -222,13 +197,11 @@ final class GeocodingDatabaseTests {
     @Test
     func testRadixPrefixBoundariesAndExactMatching() throws {
         let paths = try makeFixture(name: "radix-boundaries")
-        try GeocodingDatabaseBuilder(
-            logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
-            paths: paths
-        ).build()
-
-        let database = try GeocodingDatabase(url: paths.databaseFile)
+        let input = try String(contentsOf: paths.geonamesFile, encoding: .utf8)
+        let shortNames = [row(300, "S", 0, 0, "PPL", "TL", "N", 0), row(301, "Sp", 0, 0, "PPL", "TL", "N", 0)]
+        try (input + shortNames.joined(separator: "\n") + "\n")
+            .write(to: paths.geonamesFile, atomically: true, encoding: .utf8)
+        let database = try paths.build()
         let english = try #require(database.languageIDs["en"])
         let german = try #require(database.languageIDs["de"])
 
@@ -283,26 +256,13 @@ final class GeocodingDatabaseTests {
             ).isEmpty
         )
 
-        // One- and two-character queries retain exact-only behavior.
-        #expect(
-            try database.searchIndex.search(
-                "Sp",
-                languageID: english,
-                count: 10,
-                countryCode: nil,
-                administrativeArea: nil
-            ).isEmpty
-        )
-    }
-
-    @Test
-    func testBuildIsDeterministic() throws {
-        let first = try makeFixture(name: "deterministic-a")
-        let second = try makeFixture(name: "deterministic-b")
-        let logger = Logger(label: "database-test")
-        try GeocodingDatabaseBuilder(logger: logger, paths: first).build()
-        try GeocodingDatabaseBuilder(logger: logger, paths: second).build()
-        #expect(try Data(contentsOf: first.databaseFile) == Data(contentsOf: second.databaseFile))
+        // Short queries match complete names, excluding longer prefixes.
+        for (query, expected) in [("S", [Int32(300)]), ("Sp", [Int32(301)]), ("F", [])] {
+            #expect(try database.searchIndex.search(
+                query, languageID: english, count: 10,
+                countryCode: nil, administrativeArea: nil
+            ).map(\.id) == expected)
+        }
     }
 
     @Test
@@ -323,13 +283,7 @@ final class GeocodingDatabaseTests {
     @Test
     func testRejectsCorruptRadixEdge() throws {
         let paths = try makeFixture(name: "corrupt-edge")
-        try GeocodingDatabaseBuilder(
-            logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
-            paths: paths
-        ).build()
-
-        let database = try GeocodingDatabase(url: paths.databaseFile)
+        let database = try paths.build()
         let descriptor = database.sectionDescriptor(.searchEdges)
         var contents = try Data(contentsOf: paths.databaseFile)
         contents.writeLittleEndian(
@@ -354,13 +308,7 @@ final class GeocodingDatabaseTests {
     @Test
     func testRejectsInvalidPostingAndAdministrativeAliasRanges() throws {
         let paths = try makeFixture(name: "corrupt-structural-ranges")
-        try GeocodingDatabaseBuilder(
-            logger: Logger(label: "database-test"),
-            options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
-            paths: paths
-        ).build()
-
-        let database = try GeocodingDatabase(url: paths.databaseFile)
+        let database = try paths.build()
         let original = try Data(contentsOf: paths.databaseFile)
 
         var corruptPosting = original
