@@ -8,8 +8,6 @@ private struct SearchNameCandidate {
     let row: UInt32
     let ranking: Float
     let characterCount: UInt16
-    let nameOffset: Int
-    let nameLength: Int
 }
 
 private struct SearchPostingCandidate {
@@ -81,9 +79,7 @@ private final class CandidateRunCursor {
                 admin1ID: bytes.readUInt32(at: SearchCandidateLayout.admin1ID),
                 row: bytes.readUInt32(at: SearchCandidateLayout.row),
                 ranking: Float(bitPattern: bytes.readUInt32(at: SearchCandidateLayout.rank)),
-                characterCount: bytes.readUInt16(at: SearchCandidateLayout.characterCount),
-                nameOffset: SearchCandidateLayout.stride,
-                nameLength: record.count - SearchCandidateLayout.stride
+                characterCount: bytes.readUInt16(at: SearchCandidateLayout.characterCount)
             )
         }
     }

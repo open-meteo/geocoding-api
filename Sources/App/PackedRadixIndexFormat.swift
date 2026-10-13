@@ -79,24 +79,11 @@ struct LengthBinnedRankBounds {
         }
     }
 
-    mutating func combine(_ other: LengthBinnedRankBounds) {
-        for index in values.indices {
-            let rhs = other.values[index]
-            if rhs == PackedRadixIndexLayout.emptyRankBound {
-                continue
-            }
-            if values[index] == PackedRadixIndexLayout.emptyRankBound || rhs > values[index] {
-                values[index] = rhs
-            }
-        }
-    }
-
     func append(to output: inout [UInt16]) {
         for index in values.indices {
             output.append(values[index])
         }
     }
-
 }
 
 struct RadixIndexRoot: Sendable {

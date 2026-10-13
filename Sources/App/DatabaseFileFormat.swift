@@ -295,37 +295,11 @@ struct MappedDatabaseSection: Sendable {
         try bytes.withSpan(body)
     }
 
-    func uint8(at index: Int) -> UInt8 {
-        precondition(stride == 1 && index >= 0 && index < count)
-        return withSpan { $0[index] }
-    }
-
-    func uint16(at index: Int) -> UInt16 {
-        precondition(stride == 2 && index >= 0 && index < count)
-        return withSpan { $0.readUInt16(at: index * stride) }
-    }
-
-    func int16(at index: Int) -> Int16 {
-        return Int16(bitPattern: uint16(at: index))
-    }
-
     func uint32(at index: Int) -> UInt32 {
         precondition(stride == 4 && index >= 0 && index < count)
         return withSpan { $0.readUInt32(at: index * stride) }
     }
 
-    func int32(at index: Int) -> Int32 {
-        return Int32(bitPattern: uint32(at: index))
-    }
-
-    func float32(at index: Int) -> Float {
-        return Float(bitPattern: uint32(at: index))
-    }
-
-    func uint64(at index: Int) -> UInt64 {
-        precondition(stride == 8 && index >= 0 && index < count)
-        return withSpan { $0.readUInt64(at: index * stride) }
-    }
 }
 
 extension UnsafeMutableRawBufferPointer {
