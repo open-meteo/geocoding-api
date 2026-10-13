@@ -27,15 +27,6 @@ private struct OrdinalViewRecord {
     let maximumRank: Float
 }
 
-private struct AreaViewBuild {
-    let indexID: UInt16
-    let area: UInt32
-    let entryStart: UInt32
-    let entryCount: UInt32
-    let treeStart: UInt32
-    let treeLeafBase: UInt32
-}
-
 private func compareLexicographically(
     _ lhs: borrowing Span<UInt8>,
     _ rhs: borrowing Span<UInt8>
@@ -666,7 +657,7 @@ final class PackedRadixIndexBuilder {
         )
         var entryCount: UInt32 = 0
         var treeNodeCount: UInt32 = 0
-        var buckets = [AreaViewBuild]()
+        var buckets = [AreaOrdinalView]()
 
         let sorted = try ExternalSort.sort(
             inputs: partitions,
@@ -735,7 +726,7 @@ final class PackedRadixIndexBuilder {
                 nodeCount: &treeNodeCount
             )
             buckets.append(
-                AreaViewBuild(
+                AreaOrdinalView(
                     indexID: indexID,
                     area: area,
                     entryStart: entryStart,
