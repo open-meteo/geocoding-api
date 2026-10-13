@@ -214,24 +214,70 @@ not representative guarantees for this format.
 
 ### Service deployment
 
-Deploy the release executable and its required runtime resources with the verified database.
-The supplied [`systemd unit`](build/geocoding-api.service) expects the executable at
-`/usr/local/bin/geocoding-api`, working directory `/var/lib/geocoding-api`, and environment
-file `/etc/default/geocoding-api.env` defining `API_BIND` and `VAPOR_ENV`. Provision the
-`geocoding-api` user and group and make the database readable by that account. Build and
-verify before starting the service, using the same working directory:
+Version-tag releases include `database-v1.bin.zst` and `database-v1.bin.zst.sha256`
+alongside the Debian package. The release workflow builds and verifies the database
+from freshly downloaded GeoNames sources; release notes record the download time and
+builder commit. Releases remain drafts until published. The compressed database must
+be under GitHub's 2 GiB per-asset limit.
+
+For an Ubuntu 22.04 amd64 server, download all three assets from the same published
+release. Replace the example tag below with the desired release tag; `DEB_ASSET` must
+match the package filename shown on that release. Draft releases are not publicly
+available through these download URLs.
+
+Run the following in Bash. The commands stop on failure and keep the service stopped
+until the new database passes verification:
 
 ```bash
-cd /var/lib/geocoding-api
-sudo -u geocoding-api /usr/local/bin/geocoding-api build-database
-sudo -u geocoding-api /usr/local/bin/geocoding-api verify-database
+set -euo pipefail
+
+RELEASE_TAG='0.5.0-alpha.1'
+DEB_ASSET="geocoding-api_${RELEASE_TAG}_jammy_amd64.deb"
+RELEASE_URL="https://github.com/open-meteo/geocoding-api/releases/download/${RELEASE_TAG}"
+
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl zstd
+
+mkdir -p "geocoding-${RELEASE_TAG}"
+cd "geocoding-${RELEASE_TAG}"
+curl --fail --location --retry 3 "${RELEASE_URL}/${DEB_ASSET}" -o "$DEB_ASSET"
+curl --fail --location --retry 3 "${RELEASE_URL}/database-v1.bin.zst" -o database-v1.bin.zst
+curl --fail --location --retry 3 "${RELEASE_URL}/database-v1.bin.zst.sha256" -o database-v1.bin.zst.sha256
+sha256sum --check database-v1.bin.zst.sha256
+
+sudo mkdir -p /var/lib/geocoding-api/data
+sudo zstd -d database-v1.bin.zst -o /var/lib/geocoding-api/data/database-v1.bin.new
+
+# Prevent package installation from starting the service before verification.
+sudo systemctl mask --runtime --now geocoding-api.service
+sudo apt-get install -y "./${DEB_ASSET}"
+
+sudo chmod 644 /var/lib/geocoding-api/data/database-v1.bin.new
+sudo -u geocoding-api /usr/local/bin/geocoding-api verify-database \
+  --database /var/lib/geocoding-api/data/database-v1.bin.new
+sudo mv /var/lib/geocoding-api/data/database-v1.bin.new \
+  /var/lib/geocoding-api/data/database-v1.bin
+
+sudo systemctl unmask --runtime geocoding-api.service
 sudo systemctl enable --now geocoding-api.service
 sudo systemctl status geocoding-api.service
 ```
 
-For this workflow, place both source TSVs in `/var/lib/geocoding-api/data/` and allow the
-service account to write there during the build. Alternatively, deploy an already built
-`data/database-v1.bin`, verify it, and start the service without the source files.
+If installation or verification fails, resolve the failure before unmasking and starting
+the service. For upgrades, retain the previous package and database together for rollback.
+The final rename replaces the file atomically instead of overwriting an existing mapping.
+
+The package installs the executable at `/usr/local/bin/geocoding-api` and the
+[`systemd unit`](build/geocoding-api.service) uses `/var/lib/geocoding-api` as its working
+directory. The default configuration in `/etc/default/geocoding-api.env` listens on
+`127.0.0.1:8082` in production mode. Configure a reverse proxy for that address or change
+`API_BIND`, then restart the service.
+
+To build the database on the server instead, place both source TSVs in
+`/var/lib/geocoding-api/data/`, grant the `geocoding-api` account write access to that
+directory, and run `build-database` followed by `verify-database` as that user from
+`/var/lib/geocoding-api` before starting the service. Prebuilt deployments do not need
+the source TSV files.
 
 The [`Dockerfile`](Dockerfile) uses `/app` as its working directory; mount the database at
 `/app/data/database-v1.bin`. The supplied Compose configuration mounts a named volume at
