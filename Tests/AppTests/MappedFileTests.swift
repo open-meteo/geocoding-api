@@ -42,7 +42,7 @@ struct MappedFileTests {
     }
 
     @Test
-    func retainedIndexAndSectionSurviveDatabaseReleaseAndReplacement() async throws {
+    func retainedIndexAndSectionSurviveDatabaseReleaseAndReplacement() throws {
         let fixture = try DatabaseFixture(count: 10)
         defer { fixture.remove() }
         var input = try String(contentsOf: fixture.paths.alternateNamesFile, encoding: .utf8)
@@ -55,7 +55,7 @@ struct MappedFileTests {
         var section: MappedBytes?
         let language: UInt16
         do {
-            let database = try await fixture.build()
+            let database = try fixture.build()
             originalDatabase = database
             originalMapping = database.mappedFile
             language = try #require(database.languageIDs["en"])
@@ -65,7 +65,7 @@ struct MappedFileTests {
         #expect(originalDatabase == nil)
         try input.replacingOccurrences(of: "BeforeReplacement", with: "AfterReplacement")
             .write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
-        let replacement = try await fixture.build(force: true)
+        let replacement = try fixture.build(force: true)
 
         func ids(_ index: PackedRadixSearchIndex, _ query: String) throws -> [Int32] {
             try index.search(

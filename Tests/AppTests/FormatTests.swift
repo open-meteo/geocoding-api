@@ -23,7 +23,7 @@ struct FormatTests {
     }
 
     @Test
-    func alternatePreferenceAndSourceOrderArePreserved() async throws {
+    func alternatePreferenceAndSourceOrderArePreserved() throws {
         let fixture = try DatabaseFixture(count: 4)
         defer { fixture.remove() }
         var input = try String(contentsOf: fixture.paths.alternateNamesFile, encoding: .utf8)
@@ -39,7 +39,7 @@ struct FormatTests {
         input += "10303\t100\tpost\t1000\t\t\t\t\t\t\n"
         input += "10304\t100\tpost\t2000\t\t\t\t\t\t\n"
         try input.write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
-        let database = try await fixture.build()
+        let database = try fixture.build()
         #expect(try database.response(id: 100, languageID: 0)?.name == "Chosen")
         let french = try #require(database.languageIDs["fr"])
         #expect(try database.response(id: 100, languageID: french)?.name == "Choisi")
@@ -99,10 +99,10 @@ struct FormatTests {
     }
 
     @Test
-    func structuralOpenChecksQueryTouchedRanges() async throws {
+    func structuralOpenChecksQueryTouchedRanges() throws {
         let fixture = try DatabaseFixture(count: 65)
         defer { fixture.remove() }
-        let database = try await fixture.build()
+        let database = try fixture.build()
         let original = try Data(contentsOf: fixture.paths.databaseFile)
         let output = fixture.directory.appendingPathComponent("query-corrupt.bin")
         for kind in [DatabaseSectionKind.searchNameMetadata, .searchEdges, .administrativeAliasRecords] {
@@ -138,7 +138,7 @@ struct FormatTests {
     }
 
     @Test(arguments: [false, true])
-    func emptySections(noAlternates: Bool) async throws {
+    func emptySections(noAlternates: Bool) throws {
         let fixture = try DatabaseFixture(count: 4)
         defer { fixture.remove() }
         let input = try String(contentsOf: fixture.paths.alternateNamesFile, encoding: .utf8)
@@ -146,17 +146,17 @@ struct FormatTests {
             noAlternates
             ? "" : input.split(separator: "\n").filter { !$0.contains("\tpost\t") }.joined(separator: "\n") + "\n"
         try replacement.write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
-        let database = try await fixture.build()
+        let database = try fixture.build()
         #expect(try database.response(id: 100, languageID: 0)?.postcodes == [])
         #expect(database.header.sections[.postcodeOffsets]?.length == 0)
         if noAlternates { #expect(database.header.sections[.alternateRecords]?.length == 0) }
     }
 
     @Test
-    func deduplicatedResultsAndRecordLayout() async throws {
+    func deduplicatedResultsAndRecordLayout() throws {
         let fixture = try DatabaseFixture(count: 65)
         defer { fixture.remove() }
-        let database = try await fixture.build()
+        let database = try fixture.build()
         let header = try Data(contentsOf: fixture.paths.databaseFile).prefix(64)
         #expect(Array(header.prefix(8)) == Array("GEOCDV1\0".utf8))
         header.withUnsafeBytes { bytes in
@@ -188,42 +188,42 @@ struct FormatTests {
     }
 
     @Test
-    func publicationPreservesOldMappingAndRejectsUnforcedReplacement() async throws {
+    func publicationPreservesOldMappingAndRejectsUnforcedReplacement() throws {
         let fixture = try DatabaseFixture(count: 10)
         defer { fixture.remove() }
-        let old = try await fixture.build()
+        let old = try fixture.build()
         let original = try Data(contentsOf: fixture.paths.databaseFile)
-        await #expect(throws: (any Error).self) { _ = try await fixture.build() }
+        #expect(throws: (any Error).self) { _ = try fixture.build() }
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == original)
         let names = try String(contentsOf: fixture.paths.alternateNamesFile, encoding: .utf8)
         try names.replacingOccurrences(of: "Country A", with: "Updated Country")
             .write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
-        let replacement = try await fixture.build(force: true)
+        let replacement = try fixture.build(force: true)
         #expect(try old.response(id: 1, languageID: 0)?.name == "Country A")
         #expect(try replacement.response(id: 1, languageID: 0)?.name == "Updated Country")
         try "invalid input\n".write(to: fixture.paths.geonamesFile, atomically: true, encoding: .utf8)
         let published = try Data(contentsOf: fixture.paths.databaseFile)
-        await #expect(throws: (any Error).self) { _ = try await fixture.build(force: true) }
+        #expect(throws: (any Error).self) { _ = try fixture.build(force: true) }
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == published)
     }
 
     @Test
-    func deterministicAcrossBudgetsAndRejectsSmallBudget() async throws {
+    func deterministicAcrossBudgetsAndRejectsSmallBudget() throws {
         let fixture = try DatabaseFixture(count: 257)
         defer { fixture.remove() }
-        _ = try await fixture.build(budget: 64 << 20)
+        _ = try fixture.build(budget: 64 << 20)
         let first = try Data(contentsOf: fixture.paths.databaseFile)
-        _ = try await fixture.build(budget: 128 << 20, force: true)
+        _ = try fixture.build(budget: 128 << 20, force: true)
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == first)
-        await #expect(throws: (any Error).self) { _ = try await fixture.build(budget: 1 << 20, force: true) }
+        #expect(throws: (any Error).self) { _ = try fixture.build(budget: 1 << 20, force: true) }
         #expect(try Data(contentsOf: fixture.paths.databaseFile) == first)
     }
 
     @Test
-    func checksumAndSemanticRankVerification() async throws {
+    func checksumAndSemanticRankVerification() throws {
         let fixture = try DatabaseFixture(count: 257)
         defer { fixture.remove() }
-        let database = try await fixture.build()
+        let database = try fixture.build()
         let original = try Data(contentsOf: fixture.paths.databaseFile)
         let section = database.sectionDescriptor(.searchGlobalTrees)
         var corrupted = original

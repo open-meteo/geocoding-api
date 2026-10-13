@@ -103,7 +103,7 @@ final class GeocodingDatabaseBuilder {
         try? fileManager.removeItem(at: workspace)
     }
 
-    func build() async throws {
+    func build() throws {
         if fileManager.fileExists(atPath: paths.databaseFile.path), !options.force {
             throw DatabaseBuildIOError.write(
                 path: paths.databaseFile.path,

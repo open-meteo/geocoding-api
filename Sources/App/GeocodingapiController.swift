@@ -18,7 +18,7 @@ struct GeocodingapiController: RouteCollection, Sendable {
     let database: GeocodingDatabase
     let administrativeAreaResolver: AdministrativeAreaResolver
 
-    public init(_ app: Application) async throws {
+    public init(_ app: Application) throws {
         self.init(
             database: try GeocodingDatabase.open(
                 logger: app.logger

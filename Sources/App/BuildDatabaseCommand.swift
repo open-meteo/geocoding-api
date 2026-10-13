@@ -36,7 +36,7 @@ struct BuildDatabaseCommand: AsyncCommand {
                 reason: "--memory-limit-mb is too large for this platform."
             )
         }
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: context.application.logger,
             options: DatabaseBuildOptions(
                 memoryLimitBytes: memoryLimitBytes,

@@ -42,7 +42,7 @@ struct ConcurrentSearchTests {
     func sharedDatabaseReadsKeepResultsConsistent() async throws {
         let fixture = try DatabaseFixture(count: 257)
         defer { fixture.remove() }
-        let database = try await fixture.build()
+        let database = try fixture.build()
         let language = try #require(database.languageIDs["en"])
         let index = database.searchIndex
         let locations = database.sectionBytes(.locations)

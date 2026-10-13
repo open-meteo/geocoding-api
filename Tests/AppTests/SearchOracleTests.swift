@@ -99,10 +99,10 @@ struct DatabaseFixture {
         ].joined(separator: "\t")
     }
 
-    func build(budget: Int = 64 << 20, force: Bool = false) async throws -> GeocodingDatabase {
+    func build(budget: Int = 64 << 20, force: Bool = false) throws -> GeocodingDatabase {
         var logger = Logger(label: "fixture")
         logger.logLevel = .error
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: logger,
             options: .init(memoryLimitBytes: budget, force: force),
             paths: paths
@@ -134,10 +134,10 @@ struct DatabaseFixture {
 }
 
 @Test(arguments: [63, 64, 65, 257, 2048])
-func searchMatchesExhaustiveOracle(recordCount: Int) async throws {
+func searchMatchesExhaustiveOracle(recordCount: Int) throws {
     let fixture = try DatabaseFixture(count: recordCount)
     defer { fixture.remove() }
-    let database = try await fixture.build()
+    let database = try fixture.build()
     let language = try #require(database.languageIDs["en"])
     for query in ["Sp", "Spr", "Spring", "Spring Alias", "Spring0", "Springa", "Mün", "zzmissing"] {
         for country in [nil, "AA", "BB"] as [String?] {

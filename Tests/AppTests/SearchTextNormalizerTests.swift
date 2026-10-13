@@ -20,7 +20,7 @@ func normalizedSearchBytes(input: String, expected: String) {
 }
 
 @Test(arguments: [false, true])
-func normalizedNamesAndAliasesMatch(decomposedInput: Bool) async throws {
+func normalizedNamesAndAliasesMatch(decomposedInput: Bool) throws {
     let fixture = try DatabaseFixture(count: 0)
     defer { fixture.remove() }
     func stored(_ value: String) -> String {
@@ -39,7 +39,7 @@ func normalizedNamesAndAliasesMatch(decomposedInput: Bool) async throws {
         "\($0.offset + 1)\t\($0.offset + 100)\tfr\t\(stored($0.element))\t1\t\t\t\t\t"
     }
     try alternates.joined(separator: "\n").write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
-    let database = try await fixture.build()
+    let database = try fixture.build()
     let french = try #require(database.languageIDs["fr"])
     let resolver = AdministrativeAreaResolver(database: database)
     for spelling in ["서울", "서울".decomposedStringWithCanonicalMapping] {

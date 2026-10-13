@@ -14,9 +14,9 @@ final class GeocodingDatabaseTests {
     }
 
     @Test
-    func testBuildLoadSearchAndLocalizedResponse() async throws {
+    func testBuildLoadSearchAndLocalizedResponse() throws {
         let paths = try makeFixture(name: "primary")
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -116,9 +116,9 @@ final class GeocodingDatabaseTests {
     }
 
     @Test
-    func testAdministrativeAreaResolution() async throws {
+    func testAdministrativeAreaResolution() throws {
         let paths = try makeFixture(name: "administrative-areas")
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -172,7 +172,7 @@ final class GeocodingDatabaseTests {
     }
 
     @Test
-    func testAllCountryFeatureCodesAreResolved() async throws {
+    func testAllCountryFeatureCodesAreResolved() throws {
         let featureCodes = ["PCLI", "PCLD", "PCLIX", "PCLS", "PCLF", "PCL"]
         let countryCodes = ["AA", "AB", "AC", "AD", "AE", "AF"]
         let rows = featureCodes.enumerated().map { offset, feature in
@@ -200,7 +200,7 @@ final class GeocodingDatabaseTests {
                 )
             } + [alternate(7, 1, "post", "0000")]
         )
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -220,9 +220,9 @@ final class GeocodingDatabaseTests {
     }
 
     @Test
-    func testRadixPrefixBoundariesAndExactMatching() async throws {
+    func testRadixPrefixBoundariesAndExactMatching() throws {
         let paths = try makeFixture(name: "radix-boundaries")
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -296,12 +296,12 @@ final class GeocodingDatabaseTests {
     }
 
     @Test
-    func testBuildIsDeterministic() async throws {
+    func testBuildIsDeterministic() throws {
         let first = try makeFixture(name: "deterministic-a")
         let second = try makeFixture(name: "deterministic-b")
         let logger = Logger(label: "database-test")
-        try await GeocodingDatabaseBuilder(logger: logger, paths: first).build()
-        try await GeocodingDatabaseBuilder(logger: logger, paths: second).build()
+        try GeocodingDatabaseBuilder(logger: logger, paths: first).build()
+        try GeocodingDatabaseBuilder(logger: logger, paths: second).build()
         #expect(try Data(contentsOf: first.databaseFile) == Data(contentsOf: second.databaseFile))
     }
 
@@ -321,9 +321,9 @@ final class GeocodingDatabaseTests {
     }
 
     @Test
-    func testRejectsCorruptRadixEdge() async throws {
+    func testRejectsCorruptRadixEdge() throws {
         let paths = try makeFixture(name: "corrupt-edge")
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
@@ -352,9 +352,9 @@ final class GeocodingDatabaseTests {
     }
 
     @Test
-    func testRejectsInvalidPostingAndAdministrativeAliasRanges() async throws {
+    func testRejectsInvalidPostingAndAdministrativeAliasRanges() throws {
         let paths = try makeFixture(name: "corrupt-structural-ranges")
-        try await GeocodingDatabaseBuilder(
+        try GeocodingDatabaseBuilder(
             logger: Logger(label: "database-test"),
             options: DatabaseBuildOptions(memoryLimitBytes: 64 << 20),
             paths: paths
