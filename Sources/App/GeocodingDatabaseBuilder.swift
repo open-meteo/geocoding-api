@@ -988,23 +988,6 @@ final class GeocodingDatabaseBuilder {
         }
     }
 
-    @_lifetime(copy pool)
-    private func stringBytes(
-        in pool: borrowing Span<UInt8>,
-        offset: UInt32,
-        section: DatabaseSectionKind
-    ) throws -> Span<UInt8> {
-        let position = Int(offset)
-        guard position + 4 <= pool.count else {
-            throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
-        }
-        let length = Int(pool.readUInt32(at: position))
-        guard length <= pool.count - position - 4 else {
-            throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
-        }
-        return pool.extracting(position + 4..<position + 4 + length)
-    }
-
     private func writeDenseIDMap(_ values: [UInt32]) throws -> DatabaseSectionArtifact {
         let url = workspace.appendingPathComponent("id-to-row.section")
         let writer = try BufferedBinaryWriter(url: url)

@@ -362,6 +362,23 @@ extension UnsafeRawBufferPointer {
     }
 }
 
+@_lifetime(copy pool)
+func stringBytes(
+    in pool: borrowing Span<UInt8>,
+    offset: UInt32,
+    section: DatabaseSectionKind
+) throws -> Span<UInt8> {
+    let position = Int(offset)
+    guard pool.containsRange(offset: position, length: 4) else {
+        throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
+    }
+    let length = Int(pool.readUInt32(at: position))
+    guard length <= pool.count - position - 4 else {
+        throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
+    }
+    return pool.extracting(position + 4..<position + 4 + length)
+}
+
 extension Span where Element == UInt8 {
     func containsRange(offset: Int, length: Int) -> Bool {
         offset >= 0 && length >= 0 && offset <= count && length <= count - offset

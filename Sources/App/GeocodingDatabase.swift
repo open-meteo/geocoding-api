@@ -585,17 +585,7 @@ final class GeocodingDatabase: Sendable {
         offset: UInt32,
         section: DatabaseSectionKind
     ) throws -> String {
-        let position = Int(offset)
-        guard position + 4 <= pool.count else {
-            throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
-        }
-        let length = Int(pool.readUInt32(at: position))
-        guard length <= pool.count - position - 4 else {
-            throw DatabaseFormatError.invalidStringOffset(section: section, offset: offset)
-        }
-        guard
-            let value = pool.span.extracting(position + 4..<position + 4 + length).decodedUTF8()
-        else {
+        guard let value = try stringBytes(in: pool.span, offset: offset, section: section).decodedUTF8() else {
             throw DatabaseFormatError.invalidSection(section, "string is not valid UTF-8")
         }
         return value
@@ -904,28 +894,6 @@ final class GeocodingDatabase: Sendable {
         candidates: MappedDatabaseSection,
         languageCount: Int
     ) throws {
-        @_lifetime(copy pool)
-        func stringBytes(in pool: borrowing Span<UInt8>, offset: UInt32) throws -> Span<UInt8> {
-            let position = Int(offset)
-            guard
-                position <= pool.count,
-                pool.count - position >= 4
-            else {
-                throw DatabaseFormatError.invalidStringOffset(
-                    section: .administrativeAliasStrings,
-                    offset: offset
-                )
-            }
-            let length = Int(pool.readUInt32(at: position))
-            guard length <= pool.count - position - 4 else {
-                throw DatabaseFormatError.invalidStringOffset(
-                    section: .administrativeAliasStrings,
-                    offset: offset
-                )
-            }
-            return pool.extracting(position + 4..<position + 4 + length)
-        }
-
         func compare(
             _ lhs: borrowing Span<UInt8>,
             _ rhs: borrowing Span<UInt8>
@@ -967,7 +935,7 @@ final class GeocodingDatabase: Sendable {
                 )
             }
             let nameOffset = records.bytes.readUInt32(at: offset + AdministrativeAliasRecordLayout.nameOffset)
-            let name = try stringBytes(in: strings.bytes.span, offset: nameOffset)
+            let name = try stringBytes(in: strings.bytes.span, offset: nameOffset, section: .administrativeAliasStrings)
             let start = Int(records.bytes.readUInt32(at: offset + AdministrativeAliasRecordLayout.candidateStart))
             let count = Int(records.bytes.readUInt16(at: offset + AdministrativeAliasRecordLayout.candidateCount))
             guard
@@ -985,7 +953,10 @@ final class GeocodingDatabase: Sendable {
                     try previousKind < rawKind
                     || (previousKind == rawKind && previousLanguage < language)
                     || (previousKind == rawKind && previousLanguage == language
-                        && compare(try stringBytes(in: strings.bytes.span, offset: previousNameOffset!), name) < 0)
+                        && compare(
+                            try stringBytes(in: strings.bytes.span, offset: previousNameOffset!, section: .administrativeAliasStrings),
+                            name
+                        ) < 0)
                 guard isOrdered else {
                     throw DatabaseFormatError.invalidSection(
                         .administrativeAliasRecords,

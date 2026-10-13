@@ -168,15 +168,8 @@ struct AdministrativeAreaResolver: Sendable {
         if candidateLanguage != languageID {
             return candidateLanguage < languageID ? -1 : 1
         }
-        let stringOffset = Int(records.readUInt32(at: offset + AdministrativeAliasRecordLayout.nameOffset))
-        guard strings.containsRange(offset: stringOffset, length: 4) else {
-            throw DatabaseFormatError.invalidSection(.administrativeAliasStrings, "invalid alias offset")
-        }
-        let length = Int(strings.readUInt32(at: stringOffset))
-        guard strings.containsRange(offset: stringOffset + 4, length: length) else {
-            throw DatabaseFormatError.invalidSection(.administrativeAliasStrings, "invalid alias string range")
-        }
-        let candidate = strings.span.extracting(stringOffset + 4..<stringOffset + 4 + length)
+        let stringOffset = records.readUInt32(at: offset + AdministrativeAliasRecordLayout.nameOffset)
+        let candidate = try stringBytes(in: strings.span, offset: stringOffset, section: .administrativeAliasStrings)
         let commonCount = min(candidate.count, query.count)
         for byte in 0..<commonCount where candidate[byte] != query[byte] {
             return candidate[byte] < query[byte] ? -1 : 1

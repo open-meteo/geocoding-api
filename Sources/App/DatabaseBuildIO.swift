@@ -291,26 +291,9 @@ final class BufferedBinaryWriter {
         try withUnsafeBytes(of: &littleEndian) { try write($0) }
     }
 
-    func write(_ value: Int16) throws {
-        try write(UInt16(bitPattern: value))
-    }
-
     func write(_ value: UInt32) throws {
         var littleEndian = value.littleEndian
         try withUnsafeBytes(of: &littleEndian) { try write($0) }
-    }
-
-    func write(_ value: Int32) throws {
-        try write(UInt32(bitPattern: value))
-    }
-
-    func write(_ value: UInt64) throws {
-        var littleEndian = value.littleEndian
-        try withUnsafeBytes(of: &littleEndian) { try write($0) }
-    }
-
-    func write(_ value: Float) throws {
-        try write(value.bitPattern)
     }
 
     func write(_ bytes: UnsafeRawBufferPointer) throws {
