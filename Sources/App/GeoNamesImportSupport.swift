@@ -312,14 +312,6 @@ enum GeoNamesRecordRules {
         }
     )
 
-    static let includedFeatureCodes: Set<UInt64> = Set(
-        includedFeatureNames.compactMap {
-            $0.utf8.withContiguousStorageIfAvailable { bytes in
-                Span(_unsafeElements: bytes).packedASCII
-            } ?? nil
-        }
-    )
-
     static let featureIndexByCode: [UInt64: UInt8] = {
         var result = [UInt64: UInt8]()
         for (index, name) in includedFeatureNames.enumerated() {
@@ -343,13 +335,6 @@ enum GeoNamesRecordRules {
             return featureIndexByCode[code]
         }
     )
-
-    static func includes(_ feature: borrowing Span<UInt8>) -> Bool {
-        guard let code = feature.packedASCII else {
-            return false
-        }
-        return includedFeatureCodes.contains(code)
-    }
 
     static func featureIndex(_ feature: borrowing Span<UInt8>) -> UInt8? {
         guard let code = feature.packedASCII else {

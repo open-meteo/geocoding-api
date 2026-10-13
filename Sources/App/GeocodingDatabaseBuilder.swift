@@ -215,7 +215,7 @@ final class GeocodingDatabaseBuilder {
             let admin3 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
             let admin4 = try fields.next(&fieldCursor, file: reader.path, lineNumber: lineNumber)
 
-            guard GeoNamesRecordRules.includes(feature) else {
+            guard GeoNamesRecordRules.featureIndex(feature) != nil else {
                 return
             }
             guard !result.includedIDs.contains(unsignedID) else {
