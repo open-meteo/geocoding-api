@@ -70,8 +70,6 @@ private struct AdministrativeAliasBuildCandidate: Hashable {
 }
 
 final class GeocodingDatabaseBuilder {
-    static let geonamesFile = DatabaseBuildPaths.default.geonamesFile
-    static let alternateNamesFile = DatabaseBuildPaths.default.alternateNamesFile
     static let databaseFile = DatabaseBuildPaths.default.databaseFile
 
     private let logger: Logger
