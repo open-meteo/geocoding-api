@@ -14,7 +14,6 @@ struct ConcurrentSearchTests {
         let rows: [UInt32]
         let ids: [Int32]
         let scores: [Float]
-        let sources: [UInt16]
         let names: [String]
     }
 
@@ -35,7 +34,6 @@ struct ConcurrentSearchTests {
             rows: hits.map(\.row),
             ids: hits.map(\.id),
             scores: hits.map(\.score),
-            sources: hits.map { $0.sources.rawValue },
             names: try database.responses(hits: hits, languageID: language).map(\.name)
         )
     }

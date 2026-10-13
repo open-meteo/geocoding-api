@@ -814,9 +814,6 @@ final class GeocodingDatabase: Sendable {
                     row < UInt32(recordCount),
                     rank.isFinite, rank >= 0,
                     rank <= Float(UInt16.max - 1) / PackedRadixIndexLayout.rankScale,
-                    postings.bytes.readUInt16(at: postingOffset + SearchPostingLayout.sources) != 0,
-                    postings.bytes.readUInt16(at: postingOffset + SearchPostingLayout.sources) & ~MatchSources.all
-                        .rawValue == 0,
                     rank <= previousRank,
                     rank < previousRank || previousRow == nil || previousRow! < row
                 else {

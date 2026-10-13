@@ -846,7 +846,6 @@ final class GeocodingDatabaseBuilder {
                     admin1ID: admin1ID,
                     row: row,
                     ranking: rank,
-                    sources: .canonical,
                     writer: searchWriter
                 )
                 for alternateIndex in 0..<Int(alternateCount) {
@@ -869,8 +868,6 @@ final class GeocodingDatabaseBuilder {
                             admin1ID: admin1ID,
                             row: row,
                             ranking: rank,
-                            sources: languageID == iataLanguage || languageID == icaoLanguage
-                                ? .airportCode : .localizedAlternate,
                             writer: searchWriter
                         )
                     }
@@ -885,7 +882,6 @@ final class GeocodingDatabaseBuilder {
                             admin1ID: admin1ID,
                             row: row,
                             ranking: rank,
-                            sources: languageID == emptyLanguage ? .commonAlternate : .airportCode,
                             writer: searchWriter
                         )
                     }
@@ -905,7 +901,6 @@ final class GeocodingDatabaseBuilder {
                         admin1ID: admin1ID,
                         row: row,
                         ranking: rank,
-                        sources: .postcode,
                         writer: searchWriter
                     )
                 }
@@ -963,7 +958,6 @@ final class GeocodingDatabaseBuilder {
         admin1ID: Int32,
         row: UInt32,
         ranking: Float,
-        sources: MatchSources,
         writer: BufferedBinaryWriter
     ) throws {
         let value = bytes.withUnsafeBufferPointer {
@@ -989,7 +983,6 @@ final class GeocodingDatabaseBuilder {
             bytes.writeLittleEndian(row, at: SearchCandidateLayout.row)
             bytes.writeLittleEndian(ranking.bitPattern, at: SearchCandidateLayout.rank)
             bytes.writeLittleEndian(characterCount, at: SearchCandidateLayout.characterCount)
-            bytes.writeLittleEndian(sources.rawValue, at: SearchCandidateLayout.sources)
             bytes.writeLittleEndian(byteCount, at: SearchCandidateLayout.byteCount)
         }
         let normalizedBytes = Array(normalized.utf8)

@@ -119,20 +119,18 @@ private struct TopKResultHeap {
         return heap.first
     }
 
-    mutating func insert(row: UInt32, id: Int32, score: Float, sources: MatchSources) {
+    mutating func insert(row: UInt32, id: Int32, score: Float) {
         // The API caps K at 100; scanning avoids hash updates on every heap swap.
         let existingIndex = heap.firstIndex(where: { $0.row == row })
         if let index = existingIndex {
-            if score == heap[index].score { heap[index].sources.formUnion(sources) }
             guard score > heap[index].score else {
                 return
             }
             heap[index].score = score
-            heap[index].sources = sources
             siftDown(from: index)
             return
         }
-        let value = RankedSearchResult(row: row, id: id, score: score, sources: sources)
+        let value = RankedSearchResult(row: row, id: id, score: score)
         if heap.count < capacity {
             if heap.isEmpty { heap.reserveCapacity(capacity) }
             heap.append(value)
@@ -866,8 +864,7 @@ final class PackedRadixSearchIndex: Sendable {
                         at: rowIndex * LocationRecordLayout.stride + LocationRecordLayout.id
                     )
                 ),
-                score: score,
-                sources: MatchSources(rawValue: postings.readUInt16(at: offset + SearchPostingLayout.sources))
+                score: score
             )
         }
     }

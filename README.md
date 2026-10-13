@@ -124,14 +124,11 @@ The binary format remains version 1.
 | 33 | `searchEdges` | 12 bytes: `u32 child`, `u32 labelOffset`, `u16 labelLength`, `u8 firstByte`, `u8 reserved` |
 | 34 | `searchEdgeLabels` | Concatenated normalized UTF-8 edge labels |
 | 35 | `searchNameMetadata` | 12 bytes: `u32 postingStart`, `u32 postingCount`, `u16 characterCount`, `u16 reserved` |
-| 36 | `searchPostings` | 16 bytes: `u32 row`, `f32 rank`, packed `u16 country`, `u32 admin1ID`, `u16 sources` |
+| 36 | `searchPostings` | 14 bytes: `u32 row`, `f32 rank`, packed `u16 country`, `u32 admin1ID` |
 | 37 | `searchGlobalTrees` | 24-byte rank-bound tree nodes |
 | 38, 41 | `searchCountryBuckets`, `searchAdminBuckets` | 28 bytes: `u16 indexID`, `u16 reserved`, `u32 area`, `u32 entryStart`, `u32 entryCount`, `u32 treeStart`, `u32 treeLeafBase`, `u32 reserved` |
 | 39, 42 | `searchCountryEntries`, `searchAdminEntries` | 6 bytes: `u32 nameOrdinal`, `u16 maximumRank` |
 | 40, 43 | `searchCountryTrees`, `searchAdminTrees` | 24-byte rank-bound tree nodes |
-
-The posting `sources` bitmask uses bits 0–4 for canonical names, localized
-alternates, common alternates, airport codes, and postcodes respectively.
 
 Radix edges store path-compressed labels. In an edge's `child` field, bit 31 indicates that
 the low 31 bits are a terminal name ordinal instead of a node index. Name ordinals are local

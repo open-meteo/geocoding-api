@@ -7,7 +7,6 @@ private struct SearchNameCandidate {
     let admin1ID: UInt32
     let row: UInt32
     let ranking: Float
-    var sources: MatchSources
     let characterCount: UInt16
     let nameOffset: Int
     let nameLength: Int
@@ -18,7 +17,6 @@ private struct SearchPostingCandidate {
     let admin1ID: UInt32
     let row: UInt32
     let ranking: Float
-    var sources: MatchSources
 }
 
 private struct OrdinalViewRecord {
@@ -93,7 +91,6 @@ private final class CandidateRunCursor {
                 admin1ID: bytes.readUInt32(at: SearchCandidateLayout.admin1ID),
                 row: bytes.readUInt32(at: SearchCandidateLayout.row),
                 ranking: Float(bitPattern: bytes.readUInt32(at: SearchCandidateLayout.rank)),
-                sources: MatchSources(rawValue: bytes.readUInt16(at: SearchCandidateLayout.sources)),
                 characterCount: bytes.readUInt16(at: SearchCandidateLayout.characterCount),
                 nameOffset: SearchCandidateLayout.stride,
                 nameLength: record.count - SearchCandidateLayout.stride
@@ -381,10 +378,9 @@ private final class SearchIndexSectionWriter {
         var acceptedCount: UInt32 = 0
         var pending = try next()
         let maximumRank = pending?.ranking ?? 0
-        while var candidate = pending {
+        while let candidate = pending {
             pending = try next()
             while let duplicate = pending, duplicate.row == candidate.row {
-                candidate.sources.formUnion(duplicate.sources)
                 pending = try next()
             }
             try postingWriter.writeRecord(byteCount: SearchPostingLayout.stride) { bytes in
@@ -392,7 +388,6 @@ private final class SearchIndexSectionWriter {
                 bytes.writeLittleEndian(candidate.ranking.bitPattern, at: SearchPostingLayout.rank)
                 bytes.writeLittleEndian(candidate.country, at: SearchPostingLayout.country)
                 bytes.writeLittleEndian(candidate.admin1ID, at: SearchPostingLayout.admin1ID)
-                bytes.writeLittleEndian(candidate.sources.rawValue, at: SearchPostingLayout.sources)
             }
             postingCount += 1
             acceptedCount += 1
@@ -650,8 +645,7 @@ final class PackedRadixIndexBuilder {
                         country: candidate.country,
                         admin1ID: candidate.admin1ID,
                         row: candidate.row,
-                        ranking: candidate.ranking,
-                        sources: candidate.sources
+                        ranking: candidate.ranking
                     )
                     try cursor.advance()
                     return result

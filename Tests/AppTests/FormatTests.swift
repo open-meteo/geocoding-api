@@ -153,7 +153,7 @@ struct FormatTests {
     }
 
     @Test
-    func provenanceAndRecordLayout() async throws {
+    func deduplicatedResultsAndRecordLayout() async throws {
         let fixture = try DatabaseFixture(count: 65)
         defer { fixture.remove() }
         let database = try await fixture.build()
@@ -175,10 +175,9 @@ struct FormatTests {
             administrativeArea: nil
         )
         let hit = try #require(hits.first { $0.id == place.id })
-        #expect(hit.sources.contains(.canonical))
-        #expect(hit.sources.contains(.localizedAlternate))
+        #expect(hits.filter { $0.id == place.id }.count == 1)
         #expect(database.header.sections[.locations]?.stride == 64)
-        #expect(database.header.sections[.searchPostings]?.stride == 16)
+        #expect(database.header.sections[.searchPostings]?.stride == 14)
         let response = try #require(database.responses(hits: [hit], languageID: language).first)
         #expect(response.id == place.id)
         #expect(response.population == place.population)

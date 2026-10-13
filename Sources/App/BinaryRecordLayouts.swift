@@ -70,12 +70,11 @@ enum NameMetadataLayout {
 }
 
 enum SearchPostingLayout {
-    static let stride = 16
+    static let stride = 14
     static let row = 0
     static let rank = 4
     static let country = 8
     static let admin1ID = 10
-    static let sources = 14
 }
 
 enum AreaBucketLayout {
@@ -125,15 +124,14 @@ enum AlternateInputLayout {
 }
 
 enum SearchCandidateLayout {
-    static let stride = 24
+    static let stride = 22
     static let indexID = 0
     static let country = 2
     static let admin1ID = 4
     static let row = 8
     static let rank = 12
     static let characterCount = 16
-    static let sources = 18
-    static let byteCount = 20
+    static let byteCount = 18
 }
 
 enum OrdinalViewLayout {

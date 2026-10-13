@@ -1,20 +1,9 @@
 import Foundation
 
-struct MatchSources: OptionSet, Sendable {
-    let rawValue: UInt16
-    static let canonical = Self(rawValue: 1 << 0)
-    static let localizedAlternate = Self(rawValue: 1 << 1)
-    static let commonAlternate = Self(rawValue: 1 << 2)
-    static let airportCode = Self(rawValue: 1 << 3)
-    static let postcode = Self(rawValue: 1 << 4)
-    static let all: Self = [.canonical, .localizedAlternate, .commonAlternate, .airportCode, .postcode]
-}
-
 struct SearchHit: Sendable {
     let row: UInt32
     let id: Int32
     var score: Float
-    var sources: MatchSources
 }
 
 struct NormalizedSearchQuery {
@@ -29,7 +18,7 @@ struct NormalizedSearchQuery {
     }
 }
 
-/// Version 1 intentionally ignores provenance. Future ranking changes must update
+/// Ranking changes must update
 /// both candidate scores and the bound used before pruning, then rebuild the database.
 enum SearchScorer {
     static let version: UInt32 = 1
