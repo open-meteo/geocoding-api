@@ -348,7 +348,7 @@ struct FormatTests {
         }
         try Data().write(to: input)
         _ = try MappedRecordSort.sort(input: input, output: output, headerSize: 8, lengthOffset: 4) { _, _ in false }
-        #expect(try Data(contentsOf: output).isEmpty)
+        #expect(try output.resourceValues(forKeys: [.fileSizeKey]).fileSize == 0)
     }
 
     @Test
