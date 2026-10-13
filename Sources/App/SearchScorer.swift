@@ -1,28 +1,5 @@
 import Foundation
 
-/// Optional, request-local counters. Never shared between concurrent searches.
-final class SearchDiagnostics: Codable {
-    var postingsExamined = 0
-    var namesExamined = 0
-    var treeNodesVisited = 0
-    var postingsRejectedByGeography = 0
-    var duplicateHits = 0
-    var heapInsertions = 0
-    var heapReplacements = 0
-    var heapUpdates = 0
-
-    func add(_ other: SearchDiagnostics) {
-        postingsExamined += other.postingsExamined
-        namesExamined += other.namesExamined
-        treeNodesVisited += other.treeNodesVisited
-        postingsRejectedByGeography += other.postingsRejectedByGeography
-        duplicateHits += other.duplicateHits
-        heapInsertions += other.heapInsertions
-        heapReplacements += other.heapReplacements
-        heapUpdates += other.heapUpdates
-    }
-}
-
 struct MatchSources: OptionSet, Sendable {
     let rawValue: UInt16
     static let canonical = Self(rawValue: 1 << 0)

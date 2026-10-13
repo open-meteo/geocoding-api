@@ -32,12 +32,6 @@ private struct SearchFrontierItem {
 private struct SearchFrontierHeap {
     private var values = [SearchFrontierItem]()
 
-    let diagnostics: SearchDiagnostics?
-
-    init(diagnostics: SearchDiagnostics?) {
-        self.diagnostics = diagnostics
-    }
-
     mutating func insert(_ value: SearchFrontierItem) {
         if values.isEmpty { values.reserveCapacity(32) }
         values.append(value)
@@ -53,7 +47,6 @@ private struct SearchFrontierHeap {
     }
 
     mutating func removeMaximum() -> SearchFrontierItem? {
-        if !values.isEmpty { diagnostics?.treeNodesVisited += 1 }
         guard !values.isEmpty else {
             return nil
         }
@@ -114,10 +107,7 @@ private struct TopKResultHeap {
     let capacity: Int
     private var heap = [RankedSearchResult]()
 
-    let diagnostics: SearchDiagnostics?
-
-    init(capacity: Int, diagnostics: SearchDiagnostics?) {
-        self.diagnostics = diagnostics
+    init(capacity: Int) {
         self.capacity = capacity
     }
 
@@ -133,12 +123,10 @@ private struct TopKResultHeap {
         // The API caps K at 100; scanning avoids hash updates on every heap swap.
         let existingIndex = heap.firstIndex(where: { $0.row == row })
         if let index = existingIndex {
-            diagnostics?.duplicateHits += 1
             if score == heap[index].score { heap[index].sources.formUnion(sources) }
             guard score > heap[index].score else {
                 return
             }
-            diagnostics?.heapUpdates += 1
             heap[index].score = score
             heap[index].sources = sources
             siftDown(from: index)
@@ -146,7 +134,6 @@ private struct TopKResultHeap {
         }
         let value = RankedSearchResult(row: row, id: id, score: score, sources: sources)
         if heap.count < capacity {
-            diagnostics?.heapInsertions += 1
             if heap.isEmpty { heap.reserveCapacity(capacity) }
             heap.append(value)
             siftUp(from: heap.count - 1)
@@ -155,7 +142,6 @@ private struct TopKResultHeap {
         guard let worst, isBetter(value, than: worst) else {
             return
         }
-        diagnostics?.heapReplacements += 1
         heap[0] = value
         siftDown(from: 0)
     }
@@ -299,8 +285,7 @@ final class PackedRadixSearchIndex: Sendable {
         languageID: UInt16,
         count: Int,
         countryCode: String?,
-        administrativeArea: AdministrativeAreaResolver.Resolution?,
-        diagnostics: SearchDiagnostics? = nil
+        administrativeArea: AdministrativeAreaResolver.Resolution?
     ) throws -> [SearchHit] {
         guard count > 0 else { return [] }
         let prepared = NormalizedSearchQuery(value)
@@ -318,8 +303,7 @@ final class PackedRadixSearchIndex: Sendable {
                 languageID: languageID,
                 count: count,
                 countryCode: countryCode,
-                administrativeArea: administrativeArea,
-                diagnostics: diagnostics
+                administrativeArea: administrativeArea
             )
         }) {
             return result
@@ -333,8 +317,7 @@ final class PackedRadixSearchIndex: Sendable {
                 languageID: languageID,
                 count: count,
                 countryCode: countryCode,
-                administrativeArea: administrativeArea,
-                diagnostics: diagnostics
+                administrativeArea: administrativeArea
             )
         }
     }
@@ -346,8 +329,7 @@ final class PackedRadixSearchIndex: Sendable {
         languageID: UInt16,
         count: Int,
         countryCode: String?,
-        administrativeArea: AdministrativeAreaResolver.Resolution?,
-        diagnostics: SearchDiagnostics? = nil
+        administrativeArea: AdministrativeAreaResolver.Resolution?
     ) throws -> [SearchHit] {
         let explicitCountry = countryCode.flatMap(GeocodingDatabase.countryValue)
         if countryCode != nil, explicitCountry == nil {
@@ -366,8 +348,8 @@ final class PackedRadixSearchIndex: Sendable {
             indexCount = 2
         }
         var boosts: InlineArray<12, Float>?
-        var frontier = SearchFrontierHeap(diagnostics: diagnostics)
-        var results = TopKResultHeap(capacity: count, diagnostics: diagnostics)
+        var frontier = SearchFrontierHeap()
+        var results = TopKResultHeap(capacity: count)
         var pathKeys = SearchPathKeySet()
         var paths = [SearchTraversalPath]()
 
@@ -845,7 +827,6 @@ final class PackedRadixSearchIndex: Sendable {
         boost: Float,
         results: inout TopKResultHeap
     ) throws {
-        results.diagnostics?.namesExamined += 1
         let postingStart = Int(metadata.readUInt32(at: metadataOffset + NameMetadataLayout.postingStart))
         let postingCount = Int(metadata.readUInt32(at: metadataOffset + NameMetadataLayout.postingCount))
         guard
@@ -858,7 +839,6 @@ final class PackedRadixSearchIndex: Sendable {
         }
         let country = path.scope == .country ? UInt16(exactly: path.area) : path.countryFilter
         for postingIndex in 0..<postingCount {
-            results.diagnostics?.postingsExamined += 1
             let offset =
                 (postingStart + postingIndex) * PackedRadixIndexLayout.postingStride
             let row = postings.readUInt32(at: offset + SearchPostingLayout.row)
@@ -873,11 +853,9 @@ final class PackedRadixSearchIndex: Sendable {
             if let country,
                 postings.readUInt16(at: offset + SearchPostingLayout.country) != country
             {
-                results.diagnostics?.postingsRejectedByGeography += 1
                 continue
             }
             if path.scope == .admin, postings.readUInt32(at: offset + SearchPostingLayout.admin1ID) != path.area {
-                results.diagnostics?.postingsRejectedByGeography += 1
                 continue
             }
             let rowIndex = Int(row)

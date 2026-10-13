@@ -16,16 +16,6 @@ struct ConcurrentSearchTests {
         let scores: [Float]
         let sources: [UInt16]
         let names: [String]
-        let counters: [Int]
-    }
-
-    private static func counters(_ diagnostics: SearchDiagnostics) -> [Int] {
-        [
-            diagnostics.postingsExamined, diagnostics.namesExamined,
-            diagnostics.treeNodesVisited, diagnostics.postingsRejectedByGeography,
-            diagnostics.duplicateHits, diagnostics.heapInsertions,
-            diagnostics.heapReplacements, diagnostics.heapUpdates,
-        ]
     }
 
     private static func search(
@@ -34,41 +24,24 @@ struct ConcurrentSearchTests {
         language: UInt16,
         query: Query
     ) throws -> Snapshot {
-        // Diagnostics belong to this invocation and never cross a task boundary.
-        let diagnostics = SearchDiagnostics()
         let hits = try index.search(
             query.text,
             languageID: language,
             count: query.count,
             countryCode: query.country,
-            administrativeArea: query.admin.map { .init(admin1IDs: [$0]) },
-            diagnostics: diagnostics
+            administrativeArea: query.admin.map { .init(admin1IDs: [$0]) }
         )
-        let recorded = counters(diagnostics)
-        let independent = SearchDiagnostics()
-        let missing = try index.search(
-            "zzmissing",
-            languageID: language,
-            count: 10,
-            countryCode: nil,
-            administrativeArea: nil,
-            diagnostics: independent
-        )
-        #expect(missing.isEmpty)
-        #expect(counters(independent) == Array(repeating: 0, count: 8))
-        #expect(counters(diagnostics) == recorded)
         return Snapshot(
             rows: hits.map(\.row),
             ids: hits.map(\.id),
             scores: hits.map(\.score),
             sources: hits.map { $0.sources.rawValue },
-            names: try database.responses(hits: hits, languageID: language).map(\.name),
-            counters: recorded
+            names: try database.responses(hits: hits, languageID: language).map(\.name)
         )
     }
 
     @Test
-    func sharedDatabaseReadsKeepResultsAndDiagnosticsIndependent() async throws {
+    func sharedDatabaseReadsKeepResultsConsistent() async throws {
         let fixture = try DatabaseFixture(count: 257)
         defer { fixture.remove() }
         let database = try await fixture.build()
@@ -88,7 +61,7 @@ struct ConcurrentSearchTests {
         let expected = try queries.map {
             try Self.search(database: database, index: index, language: language, query: $0)
         }
-        #expect(expected.contains { $0.counters[0] > 0 })
+        #expect(expected.contains { !$0.ids.isEmpty })
         #expect(expected.contains { $0.ids.isEmpty })
 
         try await withThrowingTaskGroup(of: Void.self) { group in
