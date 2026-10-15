@@ -7,6 +7,25 @@ import Testing
 @Suite(.serialized)
 struct FormatTests {
     @Test
+    func unrepresentablePopulationFallsBackToZero() throws {
+        let fixture = try DatabaseFixture(count: 0)
+        defer { fixture.remove() }
+        var fields = DatabaseFixture.row(id: 3_722_285, name: "Leyogàn", feature: "ADM2", country: "HT")
+            .components(separatedBy: "\t")
+        fields[14] = "509280300982"
+        let rows = [
+            fields.joined(separator: "\t"),
+            DatabaseFixture.row(id: 100, name: "Normal", feature: "PPL", country: "HT", population: 1234),
+            DatabaseFixture.row(id: 101, name: "Maximum", feature: "PPL", country: "HT", population: .max),
+        ]
+        try rows.joined(separator: "\n").write(to: fixture.paths.geonamesFile, atomically: true, encoding: .utf8)
+        let database = try fixture.build()
+        #expect(try database.response(id: 3_722_285, languageID: 0)?.population == 0)
+        #expect(try database.response(id: 100, languageID: 0)?.population == 1234)
+        #expect(try database.response(id: 101, languageID: 0)?.population == UInt32.max)
+    }
+
+    @Test
     func signedASCIIIntegersPreserveTheirSign() {
         for value: Int32 in [0, -42, -233, -1_234_567, 42, 1234, 1_234_567, .min, .max] {
             Array(String(value).utf8).withUnsafeBufferPointer { bytes in

@@ -674,11 +674,14 @@ final class GeocodingDatabaseBuilder {
                     field: 6
                 )
             }
-            guard let population = populationBytes.unsignedInteger else {
-                throw GeoNamesImportError.invalidInteger(
-                    file: reader.path,
-                    line: lineNumber,
-                    field: 15
+            let population: UInt32
+            if let parsed = populationBytes.unsignedInteger {
+                population = parsed
+            } else {
+                population = 0
+                let value = populationBytes.decodedUTF8() ?? "<invalid UTF-8>"
+                logger.warning(
+                    "\(reader.path):\(lineNumber): invalid population '\(value)' for GeoNames ID \(id); using 0"
                 )
             }
             let elevation =
