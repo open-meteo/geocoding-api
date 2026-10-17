@@ -7,11 +7,6 @@ import Glibc
 import Darwin
 #endif
 
-#if Xcode && os(macOS)
-let projectHome = String(#filePath[...#filePath.range(of: "/Sources/")!.lowerBound])
-FileManager.default.changeCurrentDirectoryPath(projectHome)
-#endif
-
 var env = try Environment.detect()
 try LoggingSystem.bootstrap(from: &env)
 let app = try await Application.make(env)

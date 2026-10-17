@@ -7,11 +7,6 @@ public func configure(_ app: Application) throws {
     // https://github.com/vapor/vapor/pull/2677
     app.http.server.configuration.supportPipelining = false
 
-    #if Xcode
-    app.logger.logLevel = .debug
-    app.http.server.configuration.port = 8912
-    #endif
-
     app.asyncCommands.use(BuildDatabaseCommand(), as: "build-database")
     app.asyncCommands.use(VerifyDatabaseCommand(), as: "verify-database")
     if let command = app.environment.commandInput.arguments.first,
