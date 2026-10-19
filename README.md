@@ -3,7 +3,7 @@
 [![Build](https://github.com/open-meteo/geocoding-api/actions/workflows/test.yml/badge.svg)](https://github.com/open-meteo/geocoding-api/actions/workflows/test.yml)
 [![Latest release](https://img.shields.io/github/v/release/open-meteo/geocoding-api)](https://github.com/open-meteo/geocoding-api/releases/latest)
 
-Search GeoNames locations with the Open-Meteo geocoding service, written in Swift.
+Open-Meteo's geocoding API provides location search using [GeoNames source data](https://download.geonames.org/export/dump/).
 
 ## Reporting bugs
 
