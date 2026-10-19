@@ -1,25 +1,21 @@
-import ConsoleKit
+import ArgumentParser
+import Logging
 import Vapor
 
-struct BuildDatabaseCommand: AsyncCommand {
-    struct Signature: CommandSignature {
-        @Flag(
-            name: "force",
-            help: "Replace an existing database-v1.bin after a successful build."
-        )
-        var force: Bool
-    }
+struct BuildDatabaseCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "build-database",
+        abstract: "Build the memory-mapped geocoding database from GeoNames source files."
+    )
 
-    let help = "Build the memory-mapped geocoding database from GeoNames source files."
+    @Flag(help: "Replace an existing database-v1.bin after a successful build.")
+    var force = false
 
-    func run(
-        using context: ConsoleKitCommands.CommandContext,
-        signature: Signature
-    ) async throws {
+    func run() throws {
         try GeocodingDatabaseBuilder(
-            logger: context.application.logger,
-            options: DatabaseBuildOptions(force: signature.force)
+            logger: Logger.current,
+            options: DatabaseBuildOptions(force: force)
         ).build()
-        context.console.success("Built \(GeocodingDatabaseBuilder.databaseFile.path)")
+        print("Built \(GeocodingDatabaseBuilder.databaseFile.path)")
     }
 }

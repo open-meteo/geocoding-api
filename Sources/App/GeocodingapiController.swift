@@ -1,4 +1,6 @@
 import Foundation
+import HTTPTypes
+import Logging
 import Vapor
 
 /**
@@ -15,18 +17,21 @@ import Vapor
  */
 
 struct GeocodingapiController: RouteCollection, Sendable {
+    let environment: Environment
     let database: GeocodingDatabase
     let administrativeAreaResolver: AdministrativeAreaResolver
 
     public init(_ app: Application) throws {
         self.init(
             database: try GeocodingDatabase.open(
-                logger: app.logger
-            )
+                logger: Logger.current
+            ),
+            environment: app.environment
         )
     }
 
-    init(database: GeocodingDatabase) {
+    init(database: GeocodingDatabase, environment: Environment = .testing) {
+        self.environment = environment
         self.database = database
         self.administrativeAreaResolver = AdministrativeAreaResolver(
             database: database
@@ -47,19 +52,22 @@ struct GeocodingapiController: RouteCollection, Sendable {
         return (name, areaName.isEmpty ? nil : areaName)
     }
 
-    func boot(routes: RoutesBuilder) throws {
+    func boot(routes: any RoutesBuilder) async throws {
         let cors = CORSMiddleware(
             configuration: .init(
                 allowedOrigin: .all,
-                allowedMethods: [.GET, /*.POST, .PUT,*/ .OPTIONS /*.DELETE, .PATCH*/],
+                allowedMethods: [.get, .options],
                 allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
             )
         )
-        let corsGroup = routes.grouped(cors, ErrorMiddleware.default(environment: try .detect()))
+        let corsGroup = routes.grouped(cors, ErrorMiddleware.default(environment: environment))
         let categoriesRoute = corsGroup.grouped("v1")
         categoriesRoute.get("search", use: self.search)
         //categoriesRoute.get("proximity", use: self.proxmity)
         categoriesRoute.get("get", use: self.get)
+        // Route-scoped CORS middleware only runs after a route has matched.
+        categoriesRoute.on(.options, "search") { _ in Response(status: .ok) }
+        categoriesRoute.on(.options, "get") { _ in Response(status: .ok) }
     }
 
     func search(_ request: Request) async throws -> Response {
@@ -134,7 +142,7 @@ enum GeocodingApiError: Error {
 }
 
 extension GeocodingApiError: AbortError {
-    var status: HTTPResponseStatus {
+    var status: HTTPResponse.Status {
         switch self {
         case .databaseInvariant:
             return .internalServerError

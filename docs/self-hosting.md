@@ -7,6 +7,12 @@ Use an executable and database from the same release. The service reads
 `data/database-v1.bin` relative to its working directory. Prepare and verify the database
 before starting the service, and restart after replacing it.
 
+The service uses Vapor `5.0.0-beta.4`. This beta's HTTP server does not yet wire up
+response compression; configure gzip at your reverse proxy if needed. The previous
+Vapor 4 pipelining toggle is also no longer exposed by the server adapter.
+The existing `serve --env`, `--hostname`, `--port`, and `--bind` (`-b`) options remain
+available, as do `VAPOR_ENV` and `LOG_LEVEL`.
+
 ## Debian installation
 
 Download the Debian package, `database-v1.bin.zst`, and `database-v1.bin.zst.sha256`
@@ -110,6 +116,7 @@ a database in the volume, then verify it before starting them again.
 ## Building from source
 
 Install Swift 6.4 (see [`.swift-version`](../.swift-version)), `curl`, and `unzip`.
+On macOS, version 26.2 or later is required.
 Run from the repository root. Download and extract `allCountries.txt` and
 `alternateNamesV2.txt` into `data/`, then build the executable and database:
 
