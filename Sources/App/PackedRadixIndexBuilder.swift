@@ -1,5 +1,4 @@
 import Foundation
-import Vapor
 
 private struct SearchNameCandidate {
     let indexID: UInt16

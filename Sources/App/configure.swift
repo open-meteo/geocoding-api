@@ -1,23 +1,23 @@
+import Foundation
+import Logging
 import Vapor
 
-public func configure(_ app: Application) throws {
+public func configure(_ app: Application) async throws {
     TimeZone.ReferenceType.default = TimeZone(abbreviation: "GMT")!
-
-    app.http.server.configuration.responseCompression = .enabled
-    // https://github.com/vapor/vapor/pull/2677
-    app.http.server.configuration.supportPipelining = false
-
-    app.asyncCommands.use(BuildDatabaseCommand(), as: "build-database")
-    app.asyncCommands.use(VerifyDatabaseCommand(), as: "verify-database")
-    if let command = app.environment.commandInput.arguments.first,
-        ["build-database", "verify-database"].contains(command)
-    {
-        return
-    }
-
-    try routes(app)
+    try await configure(app, database: GeocodingDatabase.open(logger: Logger.current))
 }
 
-func routes(_ app: Application) throws {
-    try app.routes.register(collection: try GeocodingapiController(app))
+func configure(_ app: Application, database: GeocodingDatabase) async throws {
+    // CORS must wrap error handling so error responses also include its headers.
+    app.middleware.use(
+        CORSMiddleware(
+            configuration: .init(
+                allowedOrigin: .all,
+                allowedMethods: [.get, .options],
+                allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
+            )
+        ),
+        at: .beginning
+    )
+    try await app.routes.register(collection: GeocodingapiController(database: database))
 }

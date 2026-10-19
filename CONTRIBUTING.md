@@ -1,7 +1,8 @@
 # Contributing
 
 Use Swift 6.4, pinned in [`.swift-version`](.swift-version). The package enables the
-experimental `Lifetimes` feature and declares Swift tools version 6.3.
+experimental `Lifetimes` feature and declares Swift tools version 6.4.
+Vapor is pinned to `5.0.0-beta.4`; macOS builds require macOS 26.2 or later.
 
 ## Build and test
 

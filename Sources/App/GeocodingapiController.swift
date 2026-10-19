@@ -1,4 +1,5 @@
 import Foundation
+import HTTPTypes
 import Vapor
 
 /**
@@ -17,14 +18,6 @@ import Vapor
 struct GeocodingapiController: RouteCollection, Sendable {
     let database: GeocodingDatabase
     let administrativeAreaResolver: AdministrativeAreaResolver
-
-    public init(_ app: Application) throws {
-        self.init(
-            database: try GeocodingDatabase.open(
-                logger: app.logger
-            )
-        )
-    }
 
     init(database: GeocodingDatabase) {
         self.database = database
@@ -47,19 +40,10 @@ struct GeocodingapiController: RouteCollection, Sendable {
         return (name, areaName.isEmpty ? nil : areaName)
     }
 
-    func boot(routes: RoutesBuilder) throws {
-        let cors = CORSMiddleware(
-            configuration: .init(
-                allowedOrigin: .all,
-                allowedMethods: [.GET, /*.POST, .PUT,*/ .OPTIONS /*.DELETE, .PATCH*/],
-                allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
-            )
-        )
-        let corsGroup = routes.grouped(cors, ErrorMiddleware.default(environment: try .detect()))
-        let categoriesRoute = corsGroup.grouped("v1")
-        categoriesRoute.get("search", use: self.search)
-        //categoriesRoute.get("proximity", use: self.proxmity)
-        categoriesRoute.get("get", use: self.get)
+    func boot(routes: any RoutesBuilder) async throws {
+        let v1 = routes.grouped("v1")
+        v1.get("search", use: self.search)
+        v1.get("get", use: self.get)
     }
 
     func search(_ request: Request) async throws -> Response {
@@ -134,7 +118,7 @@ enum GeocodingApiError: Error {
 }
 
 extension GeocodingApiError: AbortError {
-    var status: HTTPResponseStatus {
+    var status: HTTPResponse.Status {
         switch self {
         case .databaseInvariant:
             return .internalServerError

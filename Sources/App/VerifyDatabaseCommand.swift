@@ -1,16 +1,18 @@
+import ArgumentParser
 import Foundation
-import Vapor
 
-struct VerifyDatabaseCommand: AsyncCommand {
-    struct Signature: CommandSignature {
-        @Option(name: "database", help: "Database path (default: data/database-v1.bin)")
-        var database: String?
-    }
-    let help = "Fully verify hashes, references, names, and ranking bounds in an immutable database."
+struct VerifyDatabaseCommand: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "verify-database",
+        abstract: "Fully verify hashes, references, names, and ranking bounds in an immutable database."
+    )
 
-    func run(using context: CommandContext, signature: Signature) async throws {
-        let url = signature.database.map { URL(fileURLWithPath: $0) } ?? GeocodingDatabase.databaseFile
+    @Option(help: "Database path (default: data/database-v1.bin)")
+    var database: String?
+
+    func run() throws {
+        let url = database.map { URL(fileURLWithPath: $0) } ?? GeocodingDatabase.databaseFile
         let database = try GeocodingDatabase(url: url, verification: .full)
-        context.console.success("Verified \(database.recordCount) locations in \(url.path)")
+        print("Verified \(database.recordCount) locations in \(url.path)")
     }
 }

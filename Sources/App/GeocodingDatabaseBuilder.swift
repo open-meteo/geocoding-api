@@ -1,5 +1,5 @@
 import Foundation
-import Vapor
+import Logging
 
 #if os(Linux)
 import Glibc

@@ -1,3 +1,4 @@
+import HTTPTypes
 import Foundation
 import SwiftProtobuf
 import Vapor
@@ -11,7 +12,7 @@ extension Message {
     /// Encode a protobuf message to a vapor response given a format
     func encode(format: ProtobufSerializationFormat?) throws -> Response {
         let start = Date()
-        let response = Response()
+        var response = Response()
         switch format ?? .json {
         case .json:
             var o = JSONEncodingOptions()
@@ -22,10 +23,7 @@ extension Message {
             response.body = Response.Body(data: try self.serializedData())
             response.headers.contentType = .init(type: "application", subType: "x-protobuf")
         }
-        response.headers.add(
-            name: "X-Encoding-Time",
-            value: "\(Date().timeIntervalSince(start) * 1000) ms"
-        )
+        response.headers[HTTPField.Name("X-Encoding-Time")!] = "\(Date().timeIntervalSince(start) * 1000) ms"
         return response
     }
 }

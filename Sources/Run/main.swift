@@ -1,21 +1,16 @@
 import App
-import Vapor
+import ArgumentParser
+import Foundation
+import Logging
 
-#if os(Linux)
-import Glibc
-#else
-import Darwin
-#endif
-
-var env = try Environment.detect()
-try LoggingSystem.bootstrap(from: &env)
-let app = try await Application.make(env)
-do {
-    try configure(app)
-    try await app.execute()
-    try await app.asyncShutdown()
-} catch {
-    app.logger.report(error: error)
-    try? await app.asyncShutdown()
-    exit(EXIT_FAILURE)
+func run() async {
+    LoggingSystem.bootstrap { label in
+        var handler = StreamLogHandler.standardOutput(label: label)
+        handler.logLevel =
+            ProcessInfo.processInfo.environment["LOG_LEVEL"].flatMap(Logger.Level.init(rawValue:)) ?? .info
+        return handler
+    }
+    await GeocodingCommand.main()
 }
+
+await run()
