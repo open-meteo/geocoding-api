@@ -14,10 +14,11 @@ struct HTTPTests {
         let database = try fixture.build()
         let id = try #require(fixture.places.first?.id)
         try await withApp { app in
-            try await app.routes.register(collection: GeocodingapiController(database: database))
+            try await configure(app, database: database)
             try await app.testing(overHTTP ? .running : .inMemory) { client in
-                var json = try await client.get("/v1/get?id=\(id)")
+                var json = try await client.get("/v1/get?id=\(id)", headers: [.origin: "https://example.com"])
                 #expect(json.status == .ok)
+                #expect(json.headers[.accessControlAllowOrigin] == "*")
                 #expect(json.headers.contentType == .json)
                 #expect(json.headers[HTTPField.Name("X-Encoding-Time")!] != nil)
                 let jsonData = try #require(await json.body.collect())
@@ -42,15 +43,22 @@ struct HTTPTests {
                     #expect(error.status == .badRequest)
                     #expect(error.headers[.accessControlAllowOrigin] == "*")
                 }
-                let preflight = try await client.send(
-                    .init(
-                        method: .options,
-                        url: "/v1/search",
-                        headers: [.origin: "https://example.com", .accessControlRequestMethod: "GET"]
+                let missing = try await client.get("/missing", headers: [.origin: "https://example.com"])
+                #expect(missing.status == .notFound)
+                #expect(missing.headers[.accessControlAllowOrigin] == "*")
+
+                for path in ["/v1/search", "/v1/get", "/missing"] {
+                    let preflight = try await client.send(
+                        .init(
+                            method: .options,
+                            url: URI(string: path),
+                            headers: [.origin: "https://example.com", .accessControlRequestMethod: "GET"]
+                        )
                     )
-                )
-                #expect(preflight.status == .ok)
-                #expect(preflight.headers[.accessControlAllowOrigin] == "*")
+                    #expect(preflight.status == .ok)
+                    #expect(preflight.headers[.accessControlAllowOrigin] == "*")
+                    #expect(preflight.headers[.accessControlAllowMethods] == "GET, OPTIONS")
+                }
             }
         }
     }

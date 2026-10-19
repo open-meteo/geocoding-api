@@ -1,6 +1,5 @@
 import ArgumentParser
 import Logging
-import Vapor
 
 struct BuildDatabaseCommand: ParsableCommand {
     static let configuration = CommandConfiguration(

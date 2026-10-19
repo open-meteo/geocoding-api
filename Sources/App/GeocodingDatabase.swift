@@ -1,6 +1,5 @@
 import Foundation
 import Logging
-import Vapor
 
 final class GeocodingDatabase: Sendable {
     static let databaseFile = GeocodingDatabaseBuilder.databaseFile

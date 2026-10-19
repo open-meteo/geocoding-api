@@ -1,6 +1,5 @@
 import Foundation
 import HTTPTypes
-import Logging
 import Vapor
 
 /**
@@ -17,21 +16,10 @@ import Vapor
  */
 
 struct GeocodingapiController: RouteCollection, Sendable {
-    let environment: Environment
     let database: GeocodingDatabase
     let administrativeAreaResolver: AdministrativeAreaResolver
 
-    public init(_ app: Application) throws {
-        self.init(
-            database: try GeocodingDatabase.open(
-                logger: Logger.current
-            ),
-            environment: app.environment
-        )
-    }
-
-    init(database: GeocodingDatabase, environment: Environment = .testing) {
-        self.environment = environment
+    init(database: GeocodingDatabase) {
         self.database = database
         self.administrativeAreaResolver = AdministrativeAreaResolver(
             database: database
@@ -53,21 +41,9 @@ struct GeocodingapiController: RouteCollection, Sendable {
     }
 
     func boot(routes: any RoutesBuilder) async throws {
-        let cors = CORSMiddleware(
-            configuration: .init(
-                allowedOrigin: .all,
-                allowedMethods: [.get, .options],
-                allowedHeaders: [.accept, .authorization, .contentType, .origin, .xRequestedWith]
-            )
-        )
-        let corsGroup = routes.grouped(cors, ErrorMiddleware.default(environment: environment))
-        let categoriesRoute = corsGroup.grouped("v1")
-        categoriesRoute.get("search", use: self.search)
-        //categoriesRoute.get("proximity", use: self.proxmity)
-        categoriesRoute.get("get", use: self.get)
-        // Route-scoped CORS middleware only runs after a route has matched.
-        categoriesRoute.on(.options, "search") { _ in Response(status: .ok) }
-        categoriesRoute.on(.options, "get") { _ in Response(status: .ok) }
+        let v1 = routes.grouped("v1")
+        v1.get("search", use: self.search)
+        v1.get("get", use: self.get)
     }
 
     func search(_ request: Request) async throws -> Response {
