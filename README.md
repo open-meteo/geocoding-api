@@ -1,40 +1,51 @@
 # Geocoding API
 
 [![Build](https://github.com/open-meteo/geocoding-api/actions/workflows/test.yml/badge.svg)](https://github.com/open-meteo/geocoding-api/actions/workflows/test.yml)
+[![Latest release](https://img.shields.io/github/v/release/open-meteo/geocoding-api)](https://github.com/open-meteo/geocoding-api/releases/latest)
 
-Todo:
-- Reconsider using protobuf library for json encoding (faster, but skips empty values, https://github.com/apple/swift-protobuf/issues/1171)
-- include additional postal database http://download.geonames.org/export/zip/
-- correctly implement iso2 county code filter
-- GeoIP support + weighted results by distance
-- Coordinates proximity search
+Open-Meteo's geocoding API provides location search using [GeoNames source data](https://download.geonames.org/export/dump/).
 
+## Reporting bugs
 
-## Installation on ubuntu 20.04
-The standalone `geocodingapi` binary can run on any 64-bit linux with recent libc. Currently only basic installation instructions for ubuntu 22.04 are available. Later Docker and others can be provided.
+[Open an issue](https://github.com/open-meteo/geocoding-api/issues) and include:
+
+- The exact request URL and parameters.
+- The expected result and actual response or error.
+- Whether you used the hosted API or a self-hosted instance.
+- For self-hosted instances: the release or commit, operating system, database source
+  and date, and relevant logs.
+- For incorrect location data: the location name and GeoNames ID, when available.
+
+Search existing issues before opening a new one.
+
+## Contributing
+
+Install the Swift version pinned in [`.swift-version`](.swift-version), then run:
 
 ```bash
-apt install zip
-
-wget https://github.com/open-meteo/geocoding-api/releases/download/0.1.1/geocoding-api_0.0.6_jammy_amd64.deb
-dpkg -i geocoding-api_0.1.1_jammy_amd64.deb
-
-mkdir /var/lib/geocoding-api/data
-cd /var/lib/geocoding-api/data
-mkdir zip
-curl http://download.geonames.org/export/dump/allCountries.zip -o allCountries.zip
-curl http://download.geonames.org/export/dump/alternateNamesV2.zip -o alternateNamesV2.zip
-unzip allCountries.zip
-unzip alternateNamesV2.zip
-
-systemctl enable geocoding-api.service
-systemctl start geocoding-api.service
-systemctl status geocoding-api.service
+swift build
+swift test
 ```
 
-Geonames data are parsed and processed during the first start, which requires some times and memor. At least 6GB RAM is required and it takes about 25 minutes on a CPU with 2 Skylake cores. Database loading takes about 5 minutes after that.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for test guidance and pull-request instructions.
+Consult the [database format reference](docs/database-format.md) when working on
+storage or search indexes.
 
-Additionally, nginx proxy should be used.
+## Self-hosting
+
+Choose an installation method:
+
+- [Debian package](docs/self-hosting.md#debian-installation): install the executable
+  and a matching prebuilt database from a published release.
+- [Docker Compose](docs/self-hosting.md#docker-compose): build the image, prepare the
+  database volume, and start the service on port 8080.
+- [Build from source](docs/self-hosting.md#building-from-source): download GeoNames
+  data and build the executable and database with Swift.
+
+Prepare `data/database-v1.bin` before starting the service. Paths are relative to the
+process working directory. Verify the database before deployment and restart the
+service after replacing it. See [rebuilding and upgrading](docs/self-hosting.md#rebuilding-and-upgrading)
+for replacement and compatibility instructions.
 
 ## Terms & Privacy
 Open-Meteo APIs are free for open-source developer and non-commercial use. We do not restrict access, but ask for fair use.

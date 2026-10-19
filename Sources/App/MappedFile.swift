@@ -1,0 +1,156 @@
+import Foundation
+
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
+
+enum MappedFileError: Error, CustomStringConvertible {
+    case open(path: String, message: String)
+    case stat(path: String, message: String)
+    case empty(path: String)
+    case map(path: String, message: String)
+    case range(offset: UInt64, length: UInt64, fileSize: Int)
+
+    var description: String {
+        switch self {
+        case .open(let path, let message):
+            return "Could not open \(path): \(message)"
+        case .stat(let path, let message):
+            return "Could not inspect \(path): \(message)"
+        case .empty(let path):
+            return "Cannot memory-map empty file \(path)"
+        case .map(let path, let message):
+            return "Could not memory-map \(path): \(message)"
+        case .range(let offset, let length, let fileSize):
+            return
+                "Mapped range at offset \(offset) with length \(length) "
+                + "exceeds file size \(fileSize)"
+        }
+    }
+}
+
+/// Owns an immutable, private memory mapping for the lifetime of the database.
+/// Writers must publish a replacement file, never truncate or mutate a mapped inode.
+///
+/// Sendable safety: the address and size never change after initialization, the
+/// mapping is read-only, and no mutable pointer escapes. Each range retains this
+/// owner, so concurrent borrowed reads finish before deinit unmaps the storage.
+/// Memory advice changes residency only; it does not mutate the mapped contents.
+final class MappedFile: @unchecked Sendable {
+    let path: String
+    let count: Int
+    private let address: UnsafeMutableRawPointer?
+
+    init(url: URL) throws {
+        path = url.path
+        let descriptor = open(path, O_RDONLY)
+        guard descriptor >= 0 else {
+            throw MappedFileError.open(path: path, message: Self.lastError())
+        }
+
+        var info = stat()
+        guard fstat(descriptor, &info) == 0 else {
+            let message = Self.lastError()
+            close(descriptor)
+            throw MappedFileError.stat(path: path, message: message)
+        }
+        guard info.st_size >= 0, let size = Int(exactly: info.st_size) else {
+            close(descriptor)
+            throw MappedFileError.empty(path: path)
+        }
+        count = size
+        if count == 0 {
+            address = nil
+            close(descriptor)
+            return
+        }
+
+        guard
+            let mapping = mmap(nil, count, PROT_READ, MAP_PRIVATE, descriptor, 0),
+            mapping != MAP_FAILED
+        else {
+            let message = Self.lastError()
+            close(descriptor)
+            throw MappedFileError.map(path: path, message: message)
+        }
+        address = mapping
+        _ = close(descriptor)
+    }
+
+    deinit {
+        if let address { _ = munmap(address, count) }
+    }
+
+    /// Validate once and return a range that keeps this mapping alive independently.
+    func bytes(offset: UInt64, length: UInt64) throws -> MappedBytes {
+        guard
+            offset <= UInt64(count),
+            length <= UInt64(count) - offset,
+            let integerOffset = Int(exactly: offset),
+            let integerLength = Int(exactly: length)
+        else {
+            throw MappedFileError.range(offset: offset, length: length, fileSize: count)
+        }
+        return MappedBytes(
+            owner: self,
+            offset: integerOffset,
+            count: integerLength
+        )
+    }
+
+    /// Only called for ranges validated by bytes(offset:length:).
+    @_lifetime(borrow self)
+    fileprivate func span(offset: Int, count: Int) -> Span<UInt8> {
+        let bytes = UnsafeRawBufferPointer(
+            start: address.map { UnsafeRawPointer($0).advanced(by: offset) },
+            count: count
+        )
+        // The allocation belongs to self, not the temporary buffer descriptor.
+        return _overrideLifetime(Span<UInt8>(_unsafeBytes: bytes), borrowing: self)
+    }
+
+    func optimizeForRandomAccess() {
+        if let address { _ = madvise(address, count, MADV_RANDOM) }
+    }
+
+    /// Release this mapping's resident pages after a verification pass. The file
+    /// and OS page cache remain intact; subsequent borrowed reads fault them back in.
+    func releaseResidentPages() {
+        if let address { _ = madvise(address, count, MADV_DONTNEED) }
+    }
+
+    private static func lastError() -> String {
+        return String(cString: strerror(errno))
+    }
+}
+
+/// An immutable, validated range that retains its mapping, including after the
+/// file is unlinked or atomically replaced. Only MappedFile can construct one.
+/// Raw pointers stay private; borrowed spans cannot outlive this owner-backed value.
+struct MappedBytes: Sendable {
+    private let owner: MappedFile
+    private let offset: Int
+    let count: Int
+
+    fileprivate init(owner: MappedFile, offset: Int, count: Int) {
+        self.owner = owner
+        self.offset = offset
+        self.count = count
+    }
+
+    var span: Span<UInt8> {
+        @_lifetime(borrow self)
+        // Borrowing self also keeps its stored mapping owner alive.
+        borrowing get { owner.span(offset: offset, count: count) }
+    }
+
+    subscript(index: Int) -> UInt8 { span[index] }
+
+    func withSpan<Result>(
+        _ body: (borrowing Span<UInt8>) throws -> Result
+    ) rethrows -> Result {
+        try body(span)
+    }
+}

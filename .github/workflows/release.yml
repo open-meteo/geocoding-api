@@ -3,7 +3,7 @@ on:
     tags:
       - '*.*.*'
 
-name: Upload Release Asset
+name: Build Release Assets
 
 env:
   swift_package_resolve: swift package resolve
@@ -13,8 +13,10 @@ env:
 
 jobs:
   linux:
+    permissions:
+      contents: write
     runs-on: ubuntu-22.04
-    container: swift:6.1.0-jammy
+    container: swift:6.4-jammy
     name: Linux
     steps:
     - name: Get Swift Version
@@ -49,9 +51,41 @@ jobs:
         fpm_opts: '-s dir -t deb -n geocoding-api -v ${{github.ref_name}} --deb-user geoocoding-api --deb-group geoocoding-api --deb-systemd build/geocoding-api.service --deb-default build/geocoding-api.env --before-install build/geocoding-before-install.sh --before-upgrade build/geocoding-before-install.sh geocoding-api=/usr/local/bin/ swift-backtrace=/usr/local/bin/'
     - name: Rename deb file
       run: mv geocoding-api_${{github.ref_name}}_amd64.deb geocoding-api_${{github.ref_name}}_jammy_amd64.deb
+    - name: Install database packaging tools
+      run: |
+        apt-get update
+        apt-get install -y --no-install-recommends ca-certificates curl unzip zstd
+    - name: Download GeoNames sources
+      shell: bash
+      run: |
+        mkdir -p data
+        printf 'GeoNames sources downloaded at %s.\n\nBuilder commit: `%s`.\n' \
+          "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse HEAD)" > database-release-notes.md
+        for source in allCountries alternateNamesV2; do
+          curl --fail --location --retry 3 \
+            "https://download.geonames.org/export/dump/$source.zip" -o "data/$source.zip"
+          unzip -p "data/$source.zip" "$source.txt" > "data/$source.txt"
+          rm "data/$source.zip"
+        done
+    - name: Build and verify database
+      run: |
+        ./geocoding-api build-database
+        ./geocoding-api verify-database
+    - name: Package database
+      shell: bash
+      run: |
+        zstd -T2 data/database-v1.bin -o database-v1.bin.zst
+        zstd --test database-v1.bin.zst
+        if [ "$(stat -c %s database-v1.bin.zst)" -ge 2147483648 ]; then
+          echo '::error::Compressed database exceeds the GitHub release asset limit (under 2 GiB).'
+          exit 1
+        fi
+        sha256sum database-v1.bin.zst > database-v1.bin.zst.sha256
     - name: Release
       uses: ncipollo/release-action@v1
       with:
         generateReleaseNotes: true
-        artifacts: 'geocoding-api_${{github.ref_name}}_jammy_amd64.deb'
+        bodyFile: database-release-notes.md
+        artifacts: 'geocoding-api_${{github.ref_name}}_jammy_amd64.deb,database-v1.bin.zst,database-v1.bin.zst.sha256'
+        artifactErrorsFailBuild: true
         draft: true

@@ -1,14 +1,21 @@
 import App
 import Vapor
 
-#if Xcode
-let projectHome = String(#file[...#file.range(of: "/Sources/")!.lowerBound])
-FileManager.default.changeCurrentDirectoryPath(projectHome)
+#if os(Linux)
+import Glibc
+#else
+import Darwin
 #endif
 
 var env = try Environment.detect()
 try LoggingSystem.bootstrap(from: &env)
 let app = try await Application.make(env)
-try configure(app)
-try await app.execute()
-try await app.asyncShutdown()
+do {
+    try configure(app)
+    try await app.execute()
+    try await app.asyncShutdown()
+} catch {
+    app.logger.report(error: error)
+    try? await app.asyncShutdown()
+    exit(EXIT_FAILURE)
+}
