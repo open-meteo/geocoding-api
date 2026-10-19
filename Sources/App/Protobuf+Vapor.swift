@@ -26,6 +26,10 @@ extension Message {
             name: "X-Encoding-Time",
             value: "\(Date().timeIntervalSince(start) * 1000) ms"
         )
+        response.headers.replaceOrAdd(
+            name: .cacheControl,
+            value: "public, max-age=86400"
+        )
         return response
     }
 }
