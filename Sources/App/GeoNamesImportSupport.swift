@@ -361,6 +361,7 @@ enum GeoNamesRecordRules {
 
     static func ranking(
         population: UInt32,
+        elevation: Int16,
         feature: borrowing Span<UInt8>,
         hasPostcode: Bool
     ) -> Float {
@@ -380,6 +381,10 @@ enum GeoNamesRecordRules {
             result += 0.18
         } else if feature.equalsASCII("PPLA5") {
             result += 0.15
+        } else if feature.equalsASCII("MT") || feature.equalsASCII("PK") {
+            // Diminishing returns: 2,000 m earns half the asymptotic 0.6 bonus.
+            let height = max(Float(elevation), 0)
+            result += 0.6 * height / (height + 2000)
         }
         return result
     }
