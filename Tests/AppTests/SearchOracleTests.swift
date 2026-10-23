@@ -73,6 +73,40 @@ func searchMatchesExhaustiveOracle(recordCount: Int) throws {
 }
 
 @Test
+func elevationRanksIndividualSummitsUsingExistingSourceFields() throws {
+    let fixture = try DatabaseFixture(count: 0)
+    defer { fixture.remove() }
+    let cases: [(feature: String, elevation: Int16?, dem: Int16, score: Float)] = [
+        ("PK", .max, 400, 2.0654845),
+        ("PK", 6000, 400, 1.95),
+        ("PK", 3000, 400, 1.86),
+        ("MT", nil, 2000, 1.8),
+        ("MT", 1000, 400, 1.7),
+        ("PPL", 8000, 400, 1.6),
+        ("PK", -10, 400, 1.5),
+        ("MTS", 8000, 400, 1.5),
+        ("PKS", 8000, 400, 1.5),
+        ("MT", nil, -9999, 1.5),
+    ]
+    let rows = cases.enumerated().map { index, value in
+        DatabaseFixture.row(
+            id: Int32(100 + index), name: "Summit", feature: value.feature, country: "AA",
+            elevation: value.elevation, dem: value.dem
+        )
+    }
+    try (rows.joined(separator: "\n") + "\n").write(to: fixture.paths.geonamesFile, atomically: true, encoding: .utf8)
+    try "".write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
+    let database = try fixture.build()
+    let hits = try database.searchIndex.search(
+        "Summit", languageID: UInt16.max, count: cases.count, countryCode: nil, administrativeArea: nil
+    )
+    #expect(hits.map(\.id) == cases.indices.map { Int32(100 + $0) })
+    for (hit, expected) in zip(hits, cases) {
+        #expect(abs(hit.score - expected.score) < 0.00001)
+    }
+}
+
+@Test
 func importantLongerNameCompetesWithExactMatches() throws {
     let fixture = try DatabaseFixture(count: 0)
     defer { fixture.remove() }

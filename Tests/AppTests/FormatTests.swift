@@ -181,7 +181,7 @@ struct FormatTests {
         header.withUnsafeBytes { bytes in
             #expect(bytes.readUInt32(at: 8) == 1)
             #expect(bytes.readUInt32(at: 52) == 1)
-            #expect(bytes.readUInt32(at: 56) == 1)
+            #expect(bytes.readUInt32(at: 56) == 2)
         }
         #expect(DatabaseBuildPaths.default.databaseFile.lastPathComponent == "database-v1.bin")
         #expect(database.header.sections[.locations]?.stride == 64)

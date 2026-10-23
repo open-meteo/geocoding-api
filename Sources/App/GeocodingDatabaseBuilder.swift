@@ -733,6 +733,7 @@ final class GeocodingDatabaseBuilder {
             let postcodeCount = alternate.postcodeCounts[Int(row)]
             let rank = GeoNamesRecordRules.ranking(
                 population: population,
+                elevation: elevation,
                 feature: feature,
                 hasPostcode: postcodeCount > 0
             )

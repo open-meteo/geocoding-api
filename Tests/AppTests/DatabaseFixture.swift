@@ -72,11 +72,13 @@ struct DatabaseFixture {
         feature: String,
         country: String,
         admin: String = "",
-        population: UInt32 = 0
+        population: UInt32 = 0,
+        elevation: Int16? = 400,
+        dem: Int16 = 400
     ) -> String {
         [
             String(id), name, name, "", "47", "8", "P", feature, country, "", admin, "", "", "",
-            String(population), "400", "400", "Europe/Zurich", "2026-01-01",
+            String(population), elevation.map { String($0) } ?? "", String(dem), "Europe/Zurich", "2026-01-01",
         ].joined(separator: "\t")
     }
 
