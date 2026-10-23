@@ -48,6 +48,7 @@ private struct AlternateNamesBuildResult {
     let languages: ByteStringInterner
     let alternateStarts: [UInt32]
     let alternateCounts: [UInt16]
+    let ordinaryAlternateNames: DynamicBitSet
     let postcodeStarts: [UInt32]
     let postcodeCounts: [UInt16]
     let artifacts: [DatabaseSectionArtifact]
@@ -406,6 +407,7 @@ final class GeocodingDatabaseBuilder {
         let postcodeOffsets = try BufferedBinaryWriter(url: postcodeOffsetsURL)
         let postcodeStrings = try BufferedBinaryWriter(url: postcodeStringsURL)
         var alternateRecordCount: UInt32 = 0
+        var ordinaryAlternateNames = DynamicBitSet()
         var postcodeRecordCount: UInt32 = 0
 
         let sortedReader = try BinaryRecordReader(
@@ -426,6 +428,9 @@ final class GeocodingDatabaseBuilder {
                 }
                 if alternateCounts[row] == 0 { alternateStarts[row] = alternateRecordCount }
                 alternateCounts[row] += 1
+                if bytes[AlternateInputLayout.preference] == 1 {
+                    ordinaryAlternateNames.insert(alternateRecordCount)
+                }
                 let offset = try alternateStrings.currentUInt32Offset()
                 try alternateStrings.write(UInt32(bytes.count - AlternateInputLayout.stride))
                 try alternateStrings.write(bytes.extracting(AlternateInputLayout.stride...))
@@ -489,6 +494,7 @@ final class GeocodingDatabaseBuilder {
             languages: languages,
             alternateStarts: alternateStarts,
             alternateCounts: alternateCounts,
+            ordinaryAlternateNames: ordinaryAlternateNames,
             postcodeStarts: postcodeStarts,
             postcodeCounts: postcodeCounts,
             artifacts: artifacts,
@@ -837,6 +843,8 @@ final class GeocodingDatabaseBuilder {
                         offset: offset,
                         section: .alternateStrings
                     )
+                    let alternateRank = alternate.ordinaryAlternateNames.contains(alternateStart + UInt32(alternateIndex))
+                        ? rank * 0.5 : rank
                     if languageID != emptyLanguage {
                         guard languageID < UInt16.max else {
                             throw GeoNamesImportError.tooManyLanguages
@@ -847,7 +855,7 @@ final class GeocodingDatabaseBuilder {
                             country: country,
                             admin1ID: admin1ID,
                             row: row,
-                            ranking: rank,
+                            ranking: alternateRank,
                             writer: searchWriter
                         )
                     }
@@ -861,7 +869,7 @@ final class GeocodingDatabaseBuilder {
                             country: country,
                             admin1ID: admin1ID,
                             row: row,
-                            ranking: rank,
+                            ranking: alternateRank,
                             writer: searchWriter
                         )
                     }
