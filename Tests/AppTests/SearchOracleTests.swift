@@ -8,6 +8,7 @@ struct OraclePlace {
     let id: Int32
     let name: String
     let alternate: String
+    let alternatePreferred: Bool
     let country: String
     let admin: Int32
     let population: UInt32
@@ -31,11 +32,12 @@ extension DatabaseFixture {
             guard country == nil || country == place.country,
                 admin == nil || admin == place.admin
             else { return nil }
-            let scores = [place.name, place.alternate].compactMap { candidate -> Float? in
+            let names: [(String, Float)] = [(place.name, 1), (place.alternate, place.alternatePreferred ? 1 : 0.5)]
+            let scores = names.compactMap { candidate, weight -> Float? in
                 let name = normalize(candidate)
                 guard query.count <= 2 ? name == normalized : name.hasPrefix(normalized) else { return nil }
                 let boost: Float = name == normalized ? 1.5 : 1.5 / (1 + 0.1 * Float(name.count - normalized.count))
-                return place.rank + boost
+                return place.rank * weight + boost
             }
             guard let score = scores.max() else { return nil }
             return (place.id, score)
@@ -92,4 +94,38 @@ func importantLongerNameCompetesWithExactMatches() throws {
         // Exact wins at equal population; the important prefix beats the tiny exact match.
         #expect(hits.map(\.id) == Array([Int32(102), 100, 101].prefix(count)))
     }
+}
+
+@Test(arguments: ["", "en"])
+func ordinaryAliasesLoseWeightWithoutPenalizingTrustedNames(language: String) throws {
+    let fixture = try DatabaseFixture(count: 0)
+    defer { fixture.remove() }
+    let rows = [
+        DatabaseFixture.row(id: 100, name: "Venice", feature: "PPLA", country: "IT", population: 51_298),
+        DatabaseFixture.row(id: 101, name: "Dayton", feature: "PPLA2", country: "US", population: 135_512),
+        DatabaseFixture.row(id: 102, name: "Venezia", feature: "PPL", country: "IT", population: 100_000),
+        DatabaseFixture.row(id: 103, name: "Venice Long Name", feature: "PPL", country: "IT", population: 100_000),
+        DatabaseFixture.row(id: 104, name: "Venice", feature: "PPL", country: "IT", population: 100_000),
+    ]
+    let alternates = [
+        "1\t101\t\(language)\tVenice\t\t\t\t\t\t",
+        "2\t102\ten\tVenice\t1\t\t\t\t\t",
+        "3\t103\ten\tVenice\t\t1\t\t\t\t",
+        "4\t104\t\(language)\tVenice\t\t\t\t\t\t",
+    ]
+    try (rows.joined(separator: "\n") + "\n").write(to: fixture.paths.geonamesFile, atomically: true, encoding: .utf8)
+    try (alternates.joined(separator: "\n") + "\n").write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
+    let database = try fixture.build()
+    let english = try #require(database.languageIDs["en"])
+    // A neutral alias identical to its canonical name shares one posting in the global index.
+    #expect(database.header.sections[.searchPostings]?.count == (language.isEmpty ? 8 : 9))
+    let hits = try database.searchIndex.search(
+        "Venice", languageID: english, count: 10, countryCode: nil, administrativeArea: nil
+    )
+    #expect(hits.map(\.id) == [100, 102, 103, 104, 101])
+    let scores = Dictionary(uniqueKeysWithValues: hits.map { ($0.id, $0.score) })
+    #expect(scores[102] == scores[103]) // Preferred translations and short names keep full weight.
+    #expect(scores[102] == scores[104]) // An ordinary duplicate cannot weaken a canonical match.
+    let daytonRank = GeoNamesRecordRules.populationRank(135_512) + 0.23
+    #expect(scores[101] == daytonRank * 0.5 + 1.5)
 }

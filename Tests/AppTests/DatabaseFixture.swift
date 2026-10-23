@@ -30,6 +30,7 @@ struct DatabaseFixture {
                     id: Int32(index + 100),
                     name: name,
                     alternate: index % 3 == 0 ? name : "Spring Alias \(index % 137)",
+                    alternatePreferred: index % 2 == 0,
                     country: index % 9 == 0 ? "BB" : "AA",
                     admin: index % 9 == 0 ? 4 : 3,
                     population: UInt32(state % 7) * 100_000
@@ -56,7 +57,7 @@ struct DatabaseFixture {
         // Countries have the optional postcode; search places deliberately do not.
         var alternates = ["1\t1\ten\tCountry A\t1\t\t\t\t\t", "2\t1\tpost\t0000\t\t\t\t\t\t"]
         alternates += places.enumerated().map {
-            "\($0.offset + 3)\t\($0.element.id)\ten\t\($0.element.alternate)\t1\t\t\t\t\t"
+            "\($0.offset + 3)\t\($0.element.id)\ten\t\($0.element.alternate)\t\($0.element.alternatePreferred ? "1" : "")\t\t\t\t\t"
         }
         try (rows.joined(separator: "\n") + "\n").write(to: paths.geonamesFile, atomically: true, encoding: .utf8)
         try (alternates.joined(separator: "\n") + "\n").write(
