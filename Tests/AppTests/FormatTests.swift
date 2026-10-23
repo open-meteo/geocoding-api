@@ -389,7 +389,7 @@ struct FormatTests {
                                     bytes: Span(_unsafeElements: raw), offset: 0, boosts: boosts
                                 )
                                 if populated {
-                                    let score = rank + (queryLength == length ? 1.5 : 1.5 / Float(length - queryLength + 1))
+                                    let score = rank + (queryLength == length ? 1.5 : 1.5 / (1 + 0.1 * Float(length - queryLength)))
                                     #expect(bound >= score)
                                 } else {
                                     #expect(bound == -Float.infinity)

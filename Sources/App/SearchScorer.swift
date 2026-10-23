@@ -18,14 +18,16 @@ struct NormalizedSearchQuery {
     }
 }
 
-/// Ranking changes must update
-/// both candidate scores and the bound used before pruning, then rebuild the database.
+/// Runtime bonus changes must keep candidate scores and pruning bounds consistent.
+/// Changes to stored ranks or their interpretation also require a version bump and rebuild.
 enum SearchScorer {
     static let version: UInt32 = 1
     static let normalizationVersion: UInt32 = 1
 
     static func boost(characterCount: Int, queryCharacters: Int, isExact: Bool) -> Float {
-        isExact ? 1.5 : 1.5 / Float(max(0, characterCount - queryCharacters) + 1)
+        // Ten unmatched characters halve the bonus, allowing important places with
+        // longer names to compete with smaller places that match exactly.
+        isExact ? 1.5 : 1.5 / (1 + 0.1 * Float(max(0, characterCount - queryCharacters)))
     }
 
     static func upperBoost(minimumLength: Int, queryCharacters: Int, onlyExact: Bool) -> Float {
