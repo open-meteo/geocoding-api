@@ -128,8 +128,13 @@ current result set.
 
 Scoring version 2 halves the stored base rank for alternative names that are neither
 preferred nor short names. Canonical names, preferred and short names, and postcodes
-retain full weight; the runtime name-match bonus is unchanged. Rebuild version-1
-databases with `build-database --force`, verify, and restart the service.
+retain full weight; the runtime name-match bonus is unchanged.
+
+Scoring version 2 also adds `0.6 * h / (h + 2000)`, where `h = max(elevation, 0)`,
+to the stored base rank of individual mountains (`MT`) and peaks (`PK`) only.
+Elevation is in metres, with DEM as the fallback when the source elevation field is empty.
+
+Rebuild version-1 databases with `build-database --force`, verify, and restart the service.
 
 The database contains an exact-match administrative-alias index for country and first-level
 administrative-area qualifiers:
