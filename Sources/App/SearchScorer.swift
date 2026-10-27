@@ -21,7 +21,7 @@ struct NormalizedSearchQuery {
 /// Runtime bonus changes must keep candidate scores and pruning bounds consistent.
 /// Changes to stored ranks or their interpretation also require a version bump and rebuild.
 enum SearchScorer {
-    static let version: UInt32 = 1
+    static let version: UInt32 = 2
     static let normalizationVersion: UInt32 = 1
 
     static func boost(characterCount: Int, queryCharacters: Int, isExact: Bool) -> Float {

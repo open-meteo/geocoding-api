@@ -362,13 +362,13 @@ private final class SearchIndexSectionWriter {
         var countries = [UInt16: Float]()
         var admins = [UInt32: Float]()
         var acceptedCount: UInt32 = 0
+        var seenRows = Set<UInt32>()
         var pending = try next()
         let maximumRank = pending?.ranking ?? 0
         while let candidate = pending {
             pending = try next()
-            while let duplicate = pending, duplicate.row == candidate.row {
-                pending = try next()
-            }
+            // Candidates are rank-sorted; aliases can give the same row different ranks.
+            guard seenRows.insert(candidate.row).inserted else { continue }
             try postingWriter.writeRecord(byteCount: SearchPostingLayout.stride) { bytes in
                 bytes.writeLittleEndian(candidate.row, at: SearchPostingLayout.row)
                 bytes.writeLittleEndian(candidate.ranking.bitPattern, at: SearchPostingLayout.rank)

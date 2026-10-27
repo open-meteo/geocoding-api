@@ -30,7 +30,7 @@ The first 4096 bytes are the header:
 | 40 | `u64` | XXHash64 fingerprint of `alternateNamesV2.txt` |
 | 48 | `u32` | Number of section descriptors |
 | 52 | `u32` | Normalization version, currently `1` |
-| 56 | `u32` | Scoring version, currently `1` |
+| 56 | `u32` | Scoring version, currently `2` |
 | 60 | `u32` | Reserved, zero |
 | 64 | variable | Array of 48-byte section descriptors |
 
@@ -125,6 +125,11 @@ Ranks are rounded upward after multiplication by 32768; `0xffff` marks an empty 
 power-of-two `treeLeafBase` stored in the corresponding root or area bucket locates the first
 leaf. These conservative bounds allow top-K traversal to skip subtrees that cannot beat the
 current result set.
+
+Scoring version 2 halves the stored base rank for alternative names that are neither
+preferred nor short names. Canonical names, preferred and short names, and postcodes
+retain full weight; the runtime name-match bonus is unchanged. Rebuild version-1
+databases with `build-database --force`, verify, and restart the service.
 
 The database contains an exact-match administrative-alias index for country and first-level
 administrative-area qualifiers:
