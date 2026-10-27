@@ -34,7 +34,7 @@ extension DatabaseFixture {
             let scores = [place.name, place.alternate].compactMap { candidate -> Float? in
                 let name = normalize(candidate)
                 guard query.count <= 2 ? name == normalized : name.hasPrefix(normalized) else { return nil }
-                let boost: Float = name == normalized ? 1.5 : 1.5 / Float(name.count - normalized.count + 1)
+                let boost: Float = name == normalized ? 1.5 : 1.5 / (1 + 0.1 * Float(name.count - normalized.count))
                 return place.rank + boost
             }
             guard let score = scores.max() else { return nil }
@@ -69,5 +69,27 @@ func searchMatchesExhaustiveOracle(recordCount: Int) throws {
                 }
             }
         }
+    }
+}
+
+@Test
+func importantLongerNameCompetesWithExactMatches() throws {
+    let fixture = try DatabaseFixture(count: 0)
+    defer { fixture.remove() }
+    let rows = [
+        DatabaseFixture.row(id: 100, name: "Newcastle upon Tyne", feature: "PPL", country: "AA", population: 300_125),
+        DatabaseFixture.row(id: 101, name: "Newcastle", feature: "PPL", country: "AA", population: 0),
+        DatabaseFixture.row(id: 102, name: "Newcastle", feature: "PPL", country: "AA", population: 300_125),
+    ]
+    // No aliases: the longer name must compete through its prefix score alone.
+    try (rows.joined(separator: "\n") + "\n").write(to: fixture.paths.geonamesFile, atomically: true, encoding: .utf8)
+    try "".write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
+    let database = try fixture.build()
+    for count in [1, 2, 3] {
+        let hits = try database.searchIndex.search(
+            "Newcastle", languageID: UInt16.max, count: count, countryCode: nil, administrativeArea: nil
+        )
+        // Exact wins at equal population; the important prefix beats the tiny exact match.
+        #expect(hits.map(\.id) == Array([Int32(102), 100, 101].prefix(count)))
     }
 }
