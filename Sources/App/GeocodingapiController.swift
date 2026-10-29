@@ -3,7 +3,7 @@ import Vapor
 
 /**
  API Endpoints:
- /v1/search?name=Berlin (&country=DE &count=30 &lang=de)  later maybe &page=1
+ /v1/search?name=Berlin (&countryCode=DE &count=30 &lang=de)  later maybe &page=1
  Queries with 0 or 1 character, return empty results
  2 character only exact match
  3 characters and more prefix search
