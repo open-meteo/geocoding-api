@@ -361,7 +361,7 @@ enum GeoNamesRecordRules {
 
     static func ranking(
         population: UInt32,
-        elevation: Int16,
+        recognitionLanguageCount: UInt16,
         feature: borrowing Span<UInt8>,
         hasPostcode: Bool
     ) -> Float {
@@ -381,10 +381,11 @@ enum GeoNamesRecordRules {
             result += 0.18
         } else if feature.equalsASCII("PPLA5") {
             result += 0.15
-        } else if feature.equalsASCII("MT") || feature.equalsASCII("PK") {
-            // Diminishing returns: 2,000 m earns half the asymptotic 0.6 bonus.
-            let height = max(Float(elevation), 0)
-            result += 0.6 * height / (height + 2000)
+        } else if feature.equalsASCII("MT") || feature.equalsASCII("PK")
+            || feature.equalsASCII("MTS") || feature.equalsASCII("PKS")
+        {
+            // A baseline for mountains and peaks, including groups, plus capped name recognition.
+            result += 0.2 + 0.05 * Float(min(recognitionLanguageCount, 8))
         }
         return result
     }

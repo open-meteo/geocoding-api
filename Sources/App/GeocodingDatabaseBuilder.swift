@@ -48,6 +48,7 @@ private struct AlternateNamesBuildResult {
     let languages: ByteStringInterner
     let alternateStarts: [UInt32]
     let alternateCounts: [UInt16]
+    let recognitionLanguageCounts: [UInt16]
     let ordinaryAlternateNames: DynamicBitSet
     let postcodeStarts: [UInt32]
     let postcodeCounts: [UInt16]
@@ -395,6 +396,13 @@ final class GeocodingDatabaseBuilder {
         let rows = Int(initial.recordCount)
         var alternateStarts = [UInt32](repeating: 0, count: rows)
         var alternateCounts = [UInt16](repeating: 0, count: rows)
+        var recognitionLanguageCounts = [UInt16](repeating: 0, count: rows)
+        // GeoNames language codes have two or three lowercase ASCII letters.
+        // This excludes blank tags and special tags such as iata, icao and abbr.
+        let recognitionLanguages = languages.strings.map { language in
+            (language.utf8.count == 2 || language.utf8.count == 3)
+                && language.utf8.allSatisfy { $0 >= 97 && $0 <= 122 }
+        }
         var postcodeStarts = [UInt32](repeating: 0, count: rows)
         var postcodeCounts = [UInt16](repeating: 0, count: rows)
 
@@ -428,6 +436,10 @@ final class GeocodingDatabaseBuilder {
                 }
                 if alternateCounts[row] == 0 { alternateStarts[row] = alternateRecordCount }
                 alternateCounts[row] += 1
+                // Deduplication counts each language once, regardless of name preference.
+                if recognitionLanguages[Int(language)] {
+                    recognitionLanguageCounts[row] += 1
+                }
                 if bytes[AlternateInputLayout.preference] == 1 {
                     ordinaryAlternateNames.insert(alternateRecordCount)
                 }
@@ -494,6 +506,7 @@ final class GeocodingDatabaseBuilder {
             languages: languages,
             alternateStarts: alternateStarts,
             alternateCounts: alternateCounts,
+            recognitionLanguageCounts: recognitionLanguageCounts,
             ordinaryAlternateNames: ordinaryAlternateNames,
             postcodeStarts: postcodeStarts,
             postcodeCounts: postcodeCounts,
@@ -739,7 +752,7 @@ final class GeocodingDatabaseBuilder {
             let postcodeCount = alternate.postcodeCounts[Int(row)]
             let rank = GeoNamesRecordRules.ranking(
                 population: population,
-                elevation: elevation,
+                recognitionLanguageCount: alternate.recognitionLanguageCounts[Int(row)],
                 feature: feature,
                 hasPostcode: postcodeCount > 0
             )
