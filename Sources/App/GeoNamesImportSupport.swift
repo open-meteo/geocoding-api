@@ -361,6 +361,7 @@ enum GeoNamesRecordRules {
 
     static func ranking(
         population: UInt32,
+        elevation: Int16,
         recognitionLanguageCount: UInt16,
         feature: borrowing Span<UInt8>,
         hasPostcode: Bool
@@ -385,7 +386,9 @@ enum GeoNamesRecordRules {
             || feature.equalsASCII("MTS") || feature.equalsASCII("PKS")
         {
             // A baseline for mountains and peaks, including groups, plus capped name recognition.
-            result += 0.2 + 0.05 * Float(min(recognitionLanguageCount, 8))
+            result += 0.1 + 0.05 * Float(min(recognitionLanguageCount, 8))
+            let height = max(Float(elevation), 0)
+            result += 0.15 * height / (height + 2000)
         }
         return result
     }

@@ -80,15 +80,15 @@ func distinctLanguagesRankSummitsAgainstSettlements() throws {
     defer { fixture.remove() }
     let cases: [(feature: String, languages: Int, population: UInt32, score: Float)] = [
         ("PPL", 0, 300_000, 0),
-        ("PK", 9, 0, 2.10),
-        ("MT", 8, 0, 2.10),
-        ("MTS", 9, 0, 2.10),
-        ("PKS", 9, 0, 2.10),
-        ("MT", 2, 0, 1.80),
-        ("PK", 1, 0, 1.75),
-        ("MT", 0, 0, 1.70),
-        ("MTS", 0, 0, 1.70),
-        ("PKS", 0, 0, 1.70),
+        ("PK", 9, 0, 2),
+        ("MT", 8, 0, 2),
+        ("MTS", 9, 0, 2),
+        ("PKS", 9, 0, 2),
+        ("MT", 2, 0, 1.7),
+        ("PK", 1, 0, 1.65),
+        ("MT", 0, 0, 1.6),
+        ("MTS", 0, 0, 1.6),
+        ("PKS", 0, 0, 1.6),
         ("PPL", 9, 0, 1.60),
         ("PPLL", 9, 0, 1.50),
     ]
@@ -141,11 +141,54 @@ func distinctLanguagesRankSummitsAgainstSettlements() throws {
 }
 
 @Test
+func elevationBreaksMountainTiesUsingSourceOrDEM() throws {
+    let fixture = try DatabaseFixture(count: 0)
+    defer { fixture.remove() }
+    let cases: [(feature: String, elevation: Int16?, dem: Int16, score: Float)] = [
+        ("MT", .max, 0, 1.7413711),
+        ("PK", 8000, 0, 1.72),
+        ("MTS", 4000, 0, 1.7),
+        ("PKS", nil, 2000, 1.675),
+        ("MT", 1000, 8000, 1.65),
+        ("MT", 0, 8000, 1.6),
+        ("PK", -10, 8000, 1.6),
+        ("MTS", nil, -9999, 1.6),
+        ("PPL", 8000, 0, 1.60),
+    ]
+    let rows = cases.enumerated().map { index, value in
+        DatabaseFixture.row(
+            id: Int32(100 + index),
+            name: "Summit",
+            feature: value.feature,
+            country: "AA",
+            elevation: value.elevation,
+            dem: value.dem
+        )
+    }
+    try (rows.joined(separator: "\n") + "\n").write(to: fixture.paths.geonamesFile, atomically: true, encoding: .utf8)
+    try "".write(to: fixture.paths.alternateNamesFile, atomically: true, encoding: .utf8)
+    let database = try fixture.build()
+    for count in [3, cases.count] {
+        let hits = try database.searchIndex.search(
+            "Summit",
+            languageID: UInt16.max,
+            count: count,
+            countryCode: nil,
+            administrativeArea: nil
+        )
+        #expect(hits.map(\.id) == cases.indices.prefix(count).map { Int32(100 + $0) })
+        for (hit, expected) in zip(hits, cases) {
+            #expect(abs(hit.score - expected.score) < 0.00001)
+        }
+    }
+}
+
+@Test
 func mountainRecognitionExcludesNonLanguageAndNonContemporaryNames() throws {
     let fixture = try DatabaseFixture(count: 0)
     defer { fixture.remove() }
     let rows = [
-        DatabaseFixture.row(id: 100, name: "Summit", feature: "MT", country: "AA", elevation: 8000),
+        DatabaseFixture.row(id: 100, name: "Summit", feature: "MT", country: "AA", elevation: nil, dem: -9999),
         DatabaseFixture.row(id: 101, name: "Summit", feature: "PK", country: "AA", elevation: nil, dem: -9999),
     ]
     var alternates = [String]()
@@ -175,8 +218,8 @@ func mountainRecognitionExcludesNonLanguageAndNonContemporaryNames() throws {
         administrativeArea: nil
     )
     #expect(hits.map(\.id) == [101, 100])
-    #expect(abs(hits[0].score - 1.85) < 0.00001)
-    #expect(abs(hits[1].score - 1.80) < 0.00001)
+    #expect(abs(hits[0].score - 1.75) < 0.00001)
+    #expect(abs(hits[1].score - 1.70) < 0.00001)
 }
 
 @Test
@@ -185,7 +228,7 @@ func shishapangmaOutranksShorterSettlementUsingOrdinaryTranslations() throws {
     defer { fixture.remove() }
     let rows = [
         DatabaseFixture.row(id: 100, name: "Shishāpara", feature: "PPL", country: "BD"),
-        DatabaseFixture.row(id: 101, name: "Xixabangma Feng", feature: "MT", country: "CN"),
+        DatabaseFixture.row(id: 101, name: "Xixabangma Feng", feature: "MT", country: "CN", elevation: 8027),
     ]
     // GeoNames has no preferred flags for these translations. English remains an
     // ordinary alternative and receives half the base rank when searched.
@@ -210,7 +253,7 @@ func shishapangmaOutranksShorterSettlementUsingOrdinaryTranslations() throws {
             administrativeArea: nil
         )
         #expect(hits.map(\.id) == Array([Int32(101), 100].prefix(count)))
-        #expect(abs(hits[0].score - 1.3) < 0.00001)
+        #expect(abs(hits[0].score - 1.3100409) < 0.00001)
         if count == 2 {
             #expect(abs(hits[1].score - (0.1 + 1.5 / 1.3)) < 0.00001)
         }

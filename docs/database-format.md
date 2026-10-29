@@ -126,21 +126,15 @@ power-of-two `treeLeafBase` stored in the corresponding root or area bucket loca
 leaf. These conservative bounds allow top-K traversal to skip subtrees that cannot beat the
 current result set.
 
-Scoring version 2 halves the stored base rank for alternative names that are neither
-preferred nor short names. Canonical names, preferred and short names, and postcodes
-retain full weight; the runtime name-match bonus is unchanged.
+Scoring version 2:
 
-Scoring version 2 also adds `0.2 + 0.05 * min(recognitionLanguageCount, 8)` to the stored
-base rank of mountains (`MT`), peaks (`PK`), mountain groups (`MTS`), and peak
-groups (`PKS`). The count includes distinct two- or three-letter lowercase language
-codes with any alternate name, regardless of preferred or short status, excluding
-historical and colloquial names. Blank and special tags (such as postcodes,
-IATA/ICAO identifiers and abbreviations) do not contribute. Elevation
-does not affect ranking. The maximum mountain bonus is 0.6.
-
-Rebuild existing databases with `build-database --force`, verify, and restart the service
-to apply the updated mountain ranking. Older scoring-version-2 databases remain
-loadable but retain their previous ranks until rebuilt.
+- Alternative names receive half the base rank unless marked preferred or short.
+  Canonical names and postcodes retain full weight.
+- `MT`, `PK`, `MTS`, and `PKS` receive a base-rank bonus of
+  `0.1 + 0.05 * min(recognitionLanguageCount, 8)`. The count includes distinct
+  two- or three-letter lowercase language tags on non-historical, non-colloquial
+  alternate names. An elevation bonus of `0.15 * h / (h + 2000)` uses
+  `h = max(elevation, 0)` in metres, with DEM as fallback for an empty elevation field.
 
 The database contains an exact-match administrative-alias index for country and first-level
 administrative-area qualifiers:
