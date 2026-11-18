@@ -5,6 +5,13 @@
 
 Open-Meteo's geocoding API provides location search using [GeoNames source data](https://download.geonames.org/export/dump/).
 
+## API documentation
+
+Use the [OpenAPI specification](openapi/geocoding.yml) to generate clients for
+location search (`GET /v1/search`) and lookup by ID (`GET /v1/get`). See the
+[Geocoding API documentation](https://open-meteo.com/en/docs/geocoding-api) for
+usage examples.
+
 ## Reporting bugs
 
 [Open an issue](https://github.com/open-meteo/geocoding-api/issues) and include:

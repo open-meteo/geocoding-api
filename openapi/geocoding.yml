@@ -1,0 +1,223 @@
+openapi: 3.0.3
+info:
+  title: Open-Meteo Geocoding API
+  version: '1.0'
+externalDocs:
+  description: Geocoding API documentation
+  url: https://open-meteo.com/en/docs/geocoding-api
+servers:
+  - url: https://geocoding-api.open-meteo.com
+    description: Public API
+paths:
+  /v1/search:
+    get:
+      operationId: searchLocations
+      summary: Search for locations
+      parameters:
+        - name: name
+          in: query
+          required: true
+          description: >-
+            Location name or postal code, optionally followed by a comma and a country
+            or first-level administrative area. Zero or one character yields no matches,
+            two require an exact match, and three or more use prefix matching.
+            See the [matching rules](https://open-meteo.com/en/docs/geocoding-api#location-search).
+          schema:
+            type: string
+          allowEmptyValue: true
+          example: Berlin
+        - name: count
+          in: query
+          description: Maximum number of locations to return after filtering.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: countryCode
+          in: query
+          description: Filter by ISO 3166-1 alpha-2 country code. Can be combined with a qualifier in name.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Language'
+        - $ref: '#/components/parameters/Format'
+      responses:
+        '200':
+          description: Matching locations. The results field is omitted when there are no matches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResults'
+            application/x-protobuf:
+              schema:
+                type: string
+                format: binary
+                description: A serialized GeocodingApi.SearchResults message.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+  /v1/get:
+    get:
+      operationId: getLocation
+      summary: Look up a location by GeoNames ID
+      parameters:
+        - name: id
+          in: query
+          required: true
+          description: GeoNames ID of the location to look up. An unknown ID returns HTTP 400.
+          schema:
+            type: integer
+            format: int32
+          example: 2657896
+        - $ref: '#/components/parameters/Language'
+        - $ref: '#/components/parameters/Format'
+      responses:
+        '200':
+          description: The requested location.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Location'
+            application/x-protobuf:
+              schema:
+                type: string
+                format: binary
+                description: A serialized GeocodingApi.Geoname message.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+components:
+  parameters:
+    Language:
+      name: language
+      in: query
+      description: >-
+        Lowercase language code for localized names. An unrecognized code uses English.
+        If a translation is unavailable, the API returns the canonical GeoNames name.
+      schema:
+        type: string
+        default: en
+    Format:
+      name: format
+      in: query
+      description: >-
+        Format of the successful response. Use the
+        [protobuf definition](https://github.com/open-meteo/geocoding-api/blob/main/Sources/App/ProtoResources/api.proto)
+        to decode protobuf responses.
+      schema:
+        type: string
+        enum: [json, protobuf]
+        default: json
+  responses:
+    BadRequest:
+      description: An invalid or missing query parameter.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalServerError:
+      description: The server could not complete the request.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    SearchResults:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Location'
+        generationtime_ms:
+          type: number
+          format: float
+          description: Processing time in milliseconds.
+    Location:
+      type: object
+      description: >-
+        A GeoNames location with localized location, country, and administrative area
+        names where available. Fields with protobuf default values are omitted in JSON.
+      properties:
+        id:
+          type: integer
+          format: int32
+          description: GeoNames ID for this location.
+        name:
+          type: string
+        latitude:
+          type: number
+          format: float
+          description: WGS 84 latitude in degrees.
+        longitude:
+          type: number
+          format: float
+          description: WGS 84 longitude in degrees.
+        elevation:
+          type: number
+          format: float
+          description: Elevation in metres above sea level.
+        feature_code:
+          type: string
+          description: GeoNames feature code for the location type.
+        country_code:
+          type: string
+          description: ISO 3166-1 alpha-2 country code.
+        country_id:
+          type: integer
+          format: int32
+          description: GeoNames ID for the country.
+        country:
+          type: string
+        admin1_id:
+          type: integer
+          format: int32
+          description: GeoNames ID for the first-level administrative area.
+        admin2_id:
+          type: integer
+          format: int32
+          description: GeoNames ID for the second-level administrative area.
+        admin3_id:
+          type: integer
+          format: int32
+          description: GeoNames ID for the third-level administrative area.
+        admin4_id:
+          type: integer
+          format: int32
+          description: GeoNames ID for the fourth-level administrative area.
+        admin1:
+          type: string
+        admin2:
+          type: string
+        admin3:
+          type: string
+        admin4:
+          type: string
+        timezone:
+          type: string
+          description: IANA time zone identifier.
+          example: Europe/Zurich
+        population:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 4294967295
+          description: Number of inhabitants.
+        postcodes:
+          type: array
+          items:
+            type: string
+          description: Postal codes associated with the location.
+    Error:
+      type: object
+      required: [error, reason]
+      properties:
+        error:
+          type: boolean
+          enum: [true]
+        reason:
+          type: string
+          description: Human-readable explanation of the error.
